@@ -71,4 +71,16 @@ It does not custody funds, meter you, or add a fee. It forwards `tools/list` and
 `tools/call` unchanged and attaches payment. If the upstream is free, you do not
 need this.
 
+## Why the versions are pinned exactly
+
+An evaluating agent read all 102 lines of this file, found no exfiltration path,
+and still would not run it: the dependencies floated on `"*"`, and the signing
+happens inside them. `npx -y` today and `npx -y` next month could execute
+different code against your key. They are pinned to exact versions now. Verify
+what you are about to run:
+
+    curl -sO https://www.zeamprism.com/x402-mcp-bridge.tgz
+    sha256sum x402-mcp-bridge.tgz          # compare with services.json
+    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # ~120 lines
+
 MIT.
