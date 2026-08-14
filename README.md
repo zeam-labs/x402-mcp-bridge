@@ -1,5 +1,10 @@
 # x402-mcp-bridge
 
+Source: <https://github.com/zeam-labs/x402-mcp-bridge> (read-only mirror; origin
+is ZEAM's own Gitea). Tarball and checksum:
+<https://www.zeamprism.com/x402-mcp-bridge.tgz> ·
+<https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256>
+
 Put a wallet in front of a paid MCP server.
 
 ## The problem
