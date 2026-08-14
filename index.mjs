@@ -11,8 +11,14 @@
 // client speaks to this; this speaks money upstream. The key never leaves the
 // machine you run it on.
 //
-//   { "prism": { "command": "npx", "args": ["-y", "@zeam/x402-mcp-bridge"],
+//   { "prism": { "command": "npx",
+//                "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge.tgz"],
 //                "env": { "X402_PRIVATE_KEY": "0x..." } } }
+//
+// The URL, not a package name: this is not on npm, and an install line that
+// 404s is worse inside the file than outside it. Source and checksum:
+//   https://github.com/zeam-labs/x402-mcp-bridge
+//   https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
