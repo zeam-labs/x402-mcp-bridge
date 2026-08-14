@@ -1,0 +1,17 @@
+{
+  "name": "@zeam/x402-mcp-bridge",
+  "version": "1.0.0",
+  "description": "Put a wallet in front of any x402-paid MCP server. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
+  "type": "module",
+  "bin": { "x402-mcp-bridge": "index.mjs" },
+  "main": "index.mjs",
+  "files": ["index.mjs", "README.md"],
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@x402/mcp": "*",
+    "@x402/evm": "*",
+    "viem": "^2.0.0"
+  }
+}
