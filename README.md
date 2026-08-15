@@ -35,12 +35,16 @@ to this; this talks money upstream.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam/x402-mcp-bridge"],
+      "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge.tgz"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
 }
 ```
+
+The URL, not a package name — this is deliberately not published on npm, and an
+install line that 404s is worse in a README than nowhere at all. Verify the
+tarball before you run it; see [below](#why-the-versions-are-pinned-exactly).
 
 The key stays on your machine. It signs vouchers locally; it is never sent
 anywhere. The bridge holds no funds — your deposit sits in the upstream's
@@ -78,14 +82,19 @@ need this.
 
 ## Why the versions are pinned exactly
 
-An evaluating agent read all 102 lines of this file, found no exfiltration path,
+An evaluating agent read all 107 lines of this file, found no exfiltration path,
 and still would not run it: the dependencies floated on `"*"`, and the signing
 happens inside them. `npx -y` today and `npx -y` next month could execute
 different code against your key. They are pinned to exact versions now. Verify
 what you are about to run:
 
     curl -sO https://www.zeamprism.com/x402-mcp-bridge.tgz
-    sha256sum x402-mcp-bridge.tgz          # compare with services.json
-    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # ~120 lines
+    curl -s  https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256
+    sha256sum x402-mcp-bridge.tgz          # also quoted in services.json
+    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 107 lines
+
+The checksum is published by us, on our own domain, so it proves the tarball
+was not altered in transit — not that we are honest. The file is short on
+purpose: read it.
 
 MIT.
