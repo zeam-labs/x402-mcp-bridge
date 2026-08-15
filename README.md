@@ -1,9 +1,11 @@
 # x402-mcp-bridge
 
-Source: <https://github.com/zeam-labs/x402-mcp-bridge> (read-only mirror; origin
-is ZEAM's own Gitea). Tarball and checksum:
+Source: <https://github.com/zeam-labs/x402-mcp-bridge>. Tarball and checksum:
 <https://www.zeamprism.com/x402-mcp-bridge.tgz> ·
 <https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256>
+
+The tarball is built from this source at the tagged version, and the checksum
+above is of that build — verify it before you run anything.
 
 Put a wallet in front of a paid MCP server.
 
