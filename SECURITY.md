@@ -67,3 +67,4 @@ pinned to exact versions precisely so that the code under the code cannot move b
 ## Supported versions
 
 The current release is the only supported one. There are no backported fixes.
+
