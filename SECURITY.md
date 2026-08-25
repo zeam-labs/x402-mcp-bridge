@@ -51,9 +51,9 @@ holds nothing else.
 This package is **not published on npm**. `@zeam/x402-mcp-bridge` does not exist; an install line
 naming it is wrong. The distribution is a tarball:
 
-    curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz
-    curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz.sha256
-    sha256sum x402-mcp-bridge-1.4.7.tgz          # also quoted in services.json
+    curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.4.8.tgz
+    curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.4.8.tgz.sha256
+    sha256sum x402-mcp-bridge-1.4.8.tgz          # also quoted in services.json
     curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 637 lines
 
 The checksum is published by us on our own domain. It proves the tarball was not altered in transit.
