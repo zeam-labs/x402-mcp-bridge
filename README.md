@@ -1,8 +1,8 @@
 # x402-mcp-bridge
 
 Source: <https://github.com/zeam-labs/x402-mcp-bridge>. Tarball and checksum:
-<https://www.zeamprism.com/x402-mcp-bridge.tgz> ·
-<https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256>
+<https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz> ·
+<https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz.sha256>
 
 The tarball is built from this source at the tagged version, and the checksum
 above is of that build — verify it before you run anything.
@@ -37,7 +37,7 @@ to this; this talks money upstream.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge.tgz"],
+      "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -193,16 +193,16 @@ need this.
 
 ## Why the versions are pinned exactly
 
-An evaluating agent read all 107 lines of this file, found no exfiltration path,
+An evaluating agent read all 637 lines of this file, found no exfiltration path,
 and still would not run it: the dependencies floated on `"*"`, and the signing
 happens inside them. `npx -y` today and `npx -y` next month could execute
 different code against your key. They are pinned to exact versions now. Verify
 what you are about to run:
 
-    curl -sO https://www.zeamprism.com/x402-mcp-bridge.tgz
-    curl -s  https://www.zeamprism.com/x402-mcp-bridge.tgz.sha256
-    sha256sum x402-mcp-bridge.tgz          # also quoted in services.json
-    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 107 lines
+    curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz
+    curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.4.7.tgz.sha256
+    sha256sum x402-mcp-bridge-1.4.7.tgz          # also quoted in services.json
+    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 637 lines
 
 The checksum is published by us, on our own domain, so it proves the tarball
 was not altered in transit — not that we are honest. The file is short on
