@@ -437,10 +437,19 @@ const LINE_MODE = (process.env.X402_LINE ?? 'auto').toLowerCase()
 // waiting is a couple of minimum holds we would have paid anyway.
 const AUTO_FAST_RUN = Number(process.env.X402_AUTO_FAST_RUN ?? 2)
 
+// And how many consecutive SLOW gaps before it lets one go. Dropping on the
+// first slow gap makes the line FLAP at the crossover: measured at 3.8 calls/sec
+// against production, auto opened and closed a line four times in eight seconds,
+// paying to reopen each time. Asymmetry is the point -- quick to open, slow to
+// close -- because an open line is already bought and holding it a little longer
+// costs a few hundred micro-USD, while reopening costs a round trip and a fresh
+// deposit check every time.
+const AUTO_SLOW_RUN = Number(process.env.X402_AUTO_SLOW_RUN ?? 4)
+
 const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null }
 
 // Rolling view of how fast the caller is actually going.
-const rate = { lastCallAt: 0, fastRun: 0 }
+const rate = { lastCallAt: 0, fastRun: 0, slowRun: 0 }
 
 // Is holding cheaper than slicing, on the evidence so far? A gap shorter than the
 // hold window means the line would have been paid for anyway; a longer one means
@@ -451,8 +460,11 @@ function holdingIsCheaper() {
   rate.lastCallAt = now
   // <=, not <: at exactly one call per hold window the two cost the same, and
   // holding avoids a signature and a settlement per call.
-  if (gap <= line.tickMs) rate.fastRun += 1
-  else rate.fastRun = 0
+  if (gap <= line.tickMs) { rate.fastRun += 1; rate.slowRun = 0 }
+  else { rate.slowRun += 1; rate.fastRun = 0 }
+
+  // Already holding? Keep holding until several gaps in a row say otherwise.
+  if (line.credential) return rate.slowRun < AUTO_SLOW_RUN
   return rate.fastRun >= AUTO_FAST_RUN
 }
 
@@ -567,10 +579,21 @@ const callOnLine = async (name, args) => {
   // long as that stays true. Holding an open line does not need re-proving on
   // every call -- once it is open the time is already being bought.
   if (LINE_MODE === 'auto') {
-    const fast = holdingIsCheaper()
-    if (!fast && !line.credential) return payFirst(name, args)
-    if (!fast && line.credential) dropLine('slower than the minimum hold — slices are cheaper')
-    if (!line.credential) return payFirst(name, args)
+    // SLOW: never hold. Drop any line we are holding, and buy a slice.
+    // FAST: fall THROUGH to the line path below, which opens one if needed.
+    //
+    // The first version of this returned payFirst() whenever no line was open,
+    // regardless of the rate -- so auto could never open one at all, and every
+    // call bought a slice forever. It inverted the bug it was written to fix:
+    // the old default always held a line (wrong when sparse), this one never
+    // held one (wrong when dense). A cold auditor measured it within the hour,
+    // billed exactly 40 x 250 for 40 calls at ~14/sec, 4.3x the documented
+    // optimum. The unit test I wrote checked the predicate and never once
+    // checked what the branch did with the answer.
+    if (!holdingIsCheaper()) {
+      if (line.credential) dropLine('slower than the minimum hold — slices are cheaper')
+      return payFirst(name, args)
+    }
   }
 
   // THE FIRST CALL ESTABLISHES THE CHANNEL AND PAYS ITS OWN PRICE.
