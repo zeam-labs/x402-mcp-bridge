@@ -1,13 +1,35 @@
 # x402-mcp-bridge
 
 Source: <https://github.com/zeam-labs/x402-mcp-bridge>. Tarball and checksum:
-<https://www.zeamprism.com/x402-mcp-bridge-1.4.9.tgz> ·
-<https://www.zeamprism.com/x402-mcp-bridge-1.4.9.tgz.sha256>
+<https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz> ·
+<https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz.sha256>
 
 The tarball is built from this source at the tagged version, and the checksum
 above is of that build — verify it before you run anything.
 
 Put a wallet in front of a paid MCP server.
+
+## One command, no MCP client
+
+A headless agent does not run a desktop MCP client. It runs a shell. So:
+
+    X402_PRIVATE_KEY=0x… npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz \
+      --call rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
+
+    X402_PRIVATE_KEY=0x… npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz --tools
+
+That pays for the call and prints the answer. Nothing else to write. With no
+arguments this is still an MCP stdio server, which is what an MCP client wants.
+
+`X402_SALT` accepts any string — it is hashed to the bytes32 the channel config
+needs. It used to require bytes32 and told you so only as
+`Expected bytes32, got bytes13` from inside a dependency, on your first attempt
+to spend money.
+
+Until 1.5.0 the only documented way in was a JSON config block for a GUI client.
+A cold agent with a funded wallet had to write its own MCP driver before it could
+buy anything, while these docs forbid hand-rolling the payment — so it had no
+supported path at all. That was the gap; this closes it.
 
 ## The line, and when this client drops it
 
@@ -41,7 +63,7 @@ to this; this talks money upstream.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge-1.4.9.tgz"],
+      "args": ["-y", "https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -203,9 +225,9 @@ happens inside them. `npx -y` today and `npx -y` next month could execute
 different code against your key. They are pinned to exact versions now. Verify
 what you are about to run:
 
-    curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.4.9.tgz
-    curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.4.9.tgz.sha256
-    sha256sum x402-mcp-bridge-1.4.9.tgz          # also quoted in services.json
+    curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz
+    curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz.sha256
+    sha256sum x402-mcp-bridge-1.5.0.tgz          # also quoted in services.json
     curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 637 lines
 
 The checksum is published by us, on our own domain, so it proves the tarball

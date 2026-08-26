@@ -29,7 +29,7 @@ import { BatchSettlementEvmScheme } from '@x402/evm/batch-settlement/client'
 import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
 import { toClientEvmSigner } from '@x402/evm'
 import { privateKeyToAccount } from 'viem/accounts'
-import { createPublicClient, http, fallback } from 'viem'
+import { createPublicClient, http, fallback, keccak256, toHex} from 'viem'
 import * as chains from 'viem/chains'
 import { mkdirSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -196,11 +196,29 @@ const noteBilled = (ctx) => {
   dropLine('spend cap reached')
 }
 
+// A SALT IS BYTES32, AND NOBODY TOLD YOU.
+//
+// X402_SALT goes straight into the channel config, which wants a 32-byte value.
+// Anything else came back as `Expected bytes32, got bytes13.` from inside viem
+// -- a dependency's type error, surfacing on the buyer's first attempt to spend
+// money, naming neither the variable nor what it wanted. The obvious thing to
+// put in that variable is a human-readable name, and the obvious thing is what
+// fails.
+//
+// A salt only has to be unique and stable, so any string can be one: hash it.
+// A value that already IS bytes32 passes through untouched, so nothing that
+// works today changes -- including channels already open under a hex salt.
+const saltOf = (raw) => {
+  const v = String(raw).trim()
+  if (/^0x[0-9a-fA-F]{64}$/.test(v)) return v
+  return keccak256(toHex(v))
+}
+
 const payments = new x402Client(selector).register(NETWORK,
   new BatchSettlementEvmScheme(toClientEvmSigner(account, pub), {
     depositPolicy,
     storage: watchedStorage,
-    ...(process.env.X402_SALT ? { salt: process.env.X402_SALT } : {}),
+    ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
   }))
 
 const upstream = wrapMCPClientWithPayment(
@@ -617,6 +635,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 // A stdio server's parent going away closes our stdin. That signal arrives
 // whether we were killed politely, killed rudely, or simply forgotten, so it is
 // the one to trust.
+// The one-shot paths need to stop the meter and RETURN, so they can print an
+// answer and set an exit code. stopPaying() exits the process itself, which is
+// right for a signal and wrong here.
+const stopPayingQuietly = async () => {
+  dropLine('one-shot call finished')
+  await new Promise(r => setTimeout(r, 50))
+}
+
 let leaving = false
 const stopPaying = (why) => {
   if (leaving) return
@@ -629,6 +655,141 @@ for (const ev of ['end', 'close']) {
   process.stdin.on(ev, () => stopPaying('stdin closed — whatever started us is gone'))
 }
 process.on('disconnect', () => stopPaying('parent disconnected'))
+
+// ONE-SHOT MODE, FOR THE BUYER THAT IS A SHELL AND NOT A DESKTOP APP.
+//
+// Until now the only way to spend money through this bridge was to speak MCP to
+// it over stdio, and the only thing we documented was a JSON config block for a
+// GUI client. A cold agent with a funded wallet -- the customer this whole
+// endpoint is built for -- had to WRITE AN MCP CLIENT before it could buy
+// anything, and our own docs forbid hand-rolling the payment, so it had no other
+// path. It wrote 45 lines of driver and said so.
+//
+// The refund was worse: {op:"refund"} needs a line that has paid a tick, this
+// bridge holds the line internally and never exposes the credential, so of the
+// four exits the terms advertise, the two cheap ones were unreachable from our
+// own client. A buyer could only leave by paying its own gas.
+//
+// So: argv. `--call <tool> <json>` pays for one call and prints the answer.
+// `--refund` uses the line it is already holding to ask for the collateral back.
+// Same payment path as the MCP mode -- callOnLine -- so there is one code path
+// that spends money, not two.
+const argv = process.argv.slice(2)
+const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] ?? '') }
+const has = (name) => argv.includes(name)
+
+if (has('--help') || has('-h')) {
+  process.stdout.write([
+    'x402-mcp-bridge — pay for MCP tools with a wallet.',
+    '',
+    '  X402_PRIVATE_KEY=0x… npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
+    '  X402_PRIVATE_KEY=0x… npx -y <this tarball> --tools',
+    '',
+    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
+    '',
+    'Env: X402_PRIVATE_KEY (required), X402_UPSTREAM, X402_MAX_SPEND (micro-USD, 0 = no cap),',
+    '     X402_DEPOSIT_MULTIPLIER (default 400 → 400 × 250 = 100000 micro-USD = $0.10 of',
+    '     refundable collateral), X402_LINE=auto|on|off, X402_SALT.',
+    '',
+  ].join('\n'))
+  process.exit(0)
+}
+
+if (has('--tools')) {
+  const out = await upstream.listTools()
+  process.stdout.write(JSON.stringify(out.tools.map(t => t.name), null, 2) + '\n')
+  await stopPayingQuietly()
+  process.exit(0)
+}
+
+if (has('--call')) {
+  const tool = flag('--call')
+  if (!tool) { process.stderr.write('--call needs a tool name\n'); process.exit(2) }
+  // The JSON argument is optional: several tools take none.
+  const rawArgs = argv[argv.indexOf('--call') + 2]
+  let args = {}
+  if (rawArgs && !rawArgs.startsWith('--')) {
+    try { args = JSON.parse(rawArgs) }
+    catch (e) { process.stderr.write(`--call arguments must be JSON: ${e.message}\n`); process.exit(2) }
+  }
+  try {
+    const out = await callOnLine(tool, args)
+    const text = out?.content?.[0]?.text
+    process.stdout.write((typeof text === 'string' ? text : JSON.stringify(out)) + '\n')
+    await stopPayingQuietly()
+    process.exit(out?.isError ? 1 : 0)
+  } catch (e) {
+    process.stderr.write(`call failed: ${e.message}\n`)
+    await stopPayingQuietly()
+    process.exit(1)
+  }
+}
+
+if (has('--refund')) {
+  // ASK ON THE LINE WE ARE ALREADY HOLDING. The socket refuses a refund until
+  // the line has paid a tick -- "that is what proves this channel is yours" --
+  // and openLine() pays one before it resolves, so by here we have standing.
+  if (!channelId) { process.stderr.write('no channel to refund — nothing has been bought with this key and salt\n'); process.exit(2) }
+  // PAY ONE TICK FIRST, WHICH IS WHAT PROVES THE CHANNEL IS OURS.
+  //
+  // The socket refuses to open a line on a channel the server has no record of
+  // -- "unknown channel — deposit first" -- and a channel opened by a per-call
+  // payment is exactly that case: the first paid call creates the channel on
+  // chain and never touches the line socket, so the server has nothing to open
+  // against. The refund then cannot prove standing and fails, which is how the
+  // cheap exit stayed unreachable.
+  //
+  // A tick is an ordinary paid call and it is the server's own stated remedy:
+  // "pay a tick first — that is what proves this channel is yours."
+  await openLine()
+  if (!line.socket) {
+    log('no line yet — paying one tick to prove this channel is ours, then asking for the refund')
+    try { await payFirst('tick', {}) } catch (e) { log(`tick failed: ${e.message}`) }
+    await openLine()
+  }
+  if (!line.socket) {
+    // SAY WHAT ACTUALLY WORKS INSTEAD OF FAILING BLANK.
+    //
+    // The socket will not open a line on a channel it has no record of, and a
+    // channel created by a per-call payment is exactly that -- the first paid
+    // call makes the channel on chain without ever touching the line socket. So
+    // {op:"refund"} cannot prove standing here. This is unfinished, and pointing
+    // at the exit that DOES work is worth more than a bare failure.
+    process.stderr.write([
+      'This channel has no line the server recognises, so {op:"refund"} cannot prove it is yours.',
+      'That is our gap, not yours, and it is why --refund is not advertised in --help yet.',
+      '',
+      'The exit that always works needs nothing from us:',
+      '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
+      'Since 2026-08-25 we also watch for that first call and return the collateral within',
+      'about thirty seconds, so in practice you should not have to wait the delay out.',
+      'Your unspent collateral is safe either way: the escrow gates withdrawal to you alone.',
+      '',
+    ].join('\n'))
+    process.exit(1)
+  }
+  // KEEP THE LINE ALIVE WHILE WE WAIT FOR THE ANSWER.
+  //
+  // The idle rule drops a line after four tick intervals of no USE, and waiting
+  // on a socket reply is not a use -- so the first version of this opened a
+  // line, asked for a refund, and idle-closed the socket a second later, before
+  // the server had answered. It reported "no answer in 30s", which reads as the
+  // server ignoring a refund request when in fact we hung up on it.
+  const keepWarm = setInterval(() => { line.lastUse = Date.now() }, 200)
+  const answer = await new Promise((resolve) => {
+    const done = setTimeout(() => resolve({ error: 'no answer in 30s' }), 30_000)
+    line.socket.addEventListener('message', (ev) => {
+      let m; try { m = JSON.parse(String(ev.data)) } catch { return }
+      if (m.op === 'refunded' || m.op === 'refund_failed' || m.error) { clearTimeout(done); resolve(m) }
+    })
+    try { line.socket.send(JSON.stringify({ op: 'refund' })) }
+    catch (e) { clearTimeout(done); resolve({ error: e.message }) }
+  })
+  clearInterval(keepWarm)
+  process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
+  await stopPayingQuietly()
+  process.exit(answer.op === 'refunded' ? 0 : 1)
+}
 
 await server.connect(new StdioServerTransport())
 if (LINE_MODE === 'on' && channelId) await openLine()
