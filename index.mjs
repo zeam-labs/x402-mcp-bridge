@@ -763,9 +763,14 @@ if (has('--refund')) {
       '',
       'The exit that always works needs nothing from us:',
       '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
-      'Since 2026-08-25 we also watch for that first call and return the collateral within',
-      'about thirty seconds, so in practice you should not have to wait the delay out.',
-      'Your unspent collateral is safe either way: the escrow gates withdrawal to you alone.',
+      'We also watch for that first call and return the collateral ourselves, at our gas,',
+      'so you usually do not have to send the second transaction. We do NOT promise when.',
+      'This said "about thirty seconds" until a third-party auditor measured it on 2026-08-26:',
+      'initiated at block 50490840, returned at 50491300 -- 920 seconds, i.e. just after the',
+      'delay elapsed, having not short-circuited it at all. The money came back and we paid',
+      'the gas; the timing was a number we had no business publishing.',
+      'Plan against the delay. Your unspent collateral is safe either way: the escrow gates',
+      'withdrawal to you alone and that part needs no trust in us.',
       '',
     ].join('\n'))
     process.exit(1)
