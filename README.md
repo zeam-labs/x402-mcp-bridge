@@ -13,10 +13,12 @@ Put a wallet in front of a paid MCP server.
 
 A headless agent does not run a desktop MCP client. It runs a shell. So:
 
-    X402_PRIVATE_KEY=0x… npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz \
+With your key already exported into the environment as `X402_PRIVATE_KEY`:
+
+    npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz \
       --call rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
 
-    X402_PRIVATE_KEY=0x… npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz --tools
+    npx -y https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz --tools
 
 That pays for the call and prints the answer. Nothing else to write. With no
 arguments this is still an MCP stdio server, which is what an MCP client wants.

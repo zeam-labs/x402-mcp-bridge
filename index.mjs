@@ -682,8 +682,10 @@ if (has('--help') || has('-h')) {
   process.stdout.write([
     'x402-mcp-bridge — pay for MCP tools with a wallet.',
     '',
-    '  X402_PRIVATE_KEY=0x… npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
-    '  X402_PRIVATE_KEY=0x… npx -y <this tarball> --tools',
+    '  With your key exported as X402_PRIVATE_KEY:',
+    '',
+    '    npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
+    '    npx -y <this tarball> --tools',
     '',
     'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
     '',
