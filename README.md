@@ -9,6 +9,10 @@ above is of that build — verify it before you run anything.
 
 Put a wallet in front of a paid MCP server.
 
+## The line, and when this client drops it
+
+The server holds an idle line for **5000ms** and bills for that time. This client drops its own line after **four tick intervals (1000ms)** of no use, so a pause costs you a reopen rather than four extra seconds of billing. That is deliberate and it is cheaper for you — but it means the `closesAfterIdleMs: 5000` you read in `services.json` is the server's ceiling, not this client's behaviour. A cold buyer measured a line dying three times in a twelve-second session and was right to call the two numbers a contradiction. Set `X402_LINE=off` to pay per call instead.
+
 ## The problem
 
 A metered MCP endpoint takes payment inside the tool call's `params._meta` — a
@@ -157,7 +161,7 @@ a channel carries one payment at a time and an overlapping tick is refused as
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. A bytes32 hex value |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | `400` | how much collateral a deposit puts in escrow, as a multiple of the quote |
+| `X402_DEPOSIT_MULTIPLIER` | `400` | how much collateral a deposit puts in escrow, as a multiple of the quote. **The quote is 250 micro-USD, so the default deposit is 400 x 250 = 100,000 micro-USD = $0.10.** That is refundable collateral, not a charge — but it leaves your wallet the moment you open a channel, and no page said the number out loud until a cold buyer had to multiply two figures from two documents to find out what plugging in the config would cost it. Lower it if $0.10 is more than you want committed; the scheme refuses below 3x. |
 
 ## It stops spending when you stop watching
 
