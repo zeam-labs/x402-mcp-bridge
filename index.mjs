@@ -410,13 +410,51 @@ log(`channel state in ${stateDir}`)
 // not do that -- it paid per call, which is the fallback, not the product. The
 // only client we shipped could not buy the thing we advertise.
 //
-// AUTO by default, and auto is not a hedge. A line is cheaper than per-call
-// pricing exactly while calls are flowing and more expensive while they are not,
-// so we open one on the first call, hold it while work continues, and let it
-// lapse when the work stops. Set X402_LINE=off for per-call only, or =on to hold
-// a line from startup and keep paying whether or not anyone calls.
+// AUTO MEASURES THE RATE INSTEAD OF ASSUMING IT.
+//
+// A held line bills WALL-CLOCK time whether you call or not. A call with no line
+// buys the server's minimum hold -- 250ms at the published rate -- and bills only
+// when you call. So the line is cheaper exactly while you call more often than
+// once per minimum hold, and more expensive the rest of the time. The crossover
+// is arithmetic, not judgement.
+//
+// Auto used to open a line on the FIRST call and hold it while work "continued",
+// which assumed the answer. A third-party auditor measured what that costs the
+// sparse agent this bridge exists for:
+//
+//   20 calls @ 1/sec    line 19,817 uUSD   slices  5,000   3.96x
+//   48 calls @ 0.5/sec  line 39,147 uUSD   slices 12,000   3.26x
+//
+// At 0.5/sec it was tearing the line down and reopening it per call -- holding,
+// billing, and delivering none of the benefit. Now auto stays on slices until it
+// has actually seen calls arriving faster than the hold window, and drops the
+// line again when they slow down. X402_LINE=on holds from startup regardless;
+// =off never holds.
 const LINE_MODE = (process.env.X402_LINE ?? 'auto').toLowerCase()
+
+// How many consecutive fast gaps before auto commits to a line. Two is enough to
+// tell a burst from a coincidence and cheap to be wrong about: the cost of
+// waiting is a couple of minimum holds we would have paid anyway.
+const AUTO_FAST_RUN = Number(process.env.X402_AUTO_FAST_RUN ?? 2)
+
 const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null }
+
+// Rolling view of how fast the caller is actually going.
+const rate = { lastCallAt: 0, fastRun: 0 }
+
+// Is holding cheaper than slicing, on the evidence so far? A gap shorter than the
+// hold window means the line would have been paid for anyway; a longer one means
+// we would be buying idle time.
+function holdingIsCheaper() {
+  const now = Date.now()
+  const gap = rate.lastCallAt ? now - rate.lastCallAt : Infinity
+  rate.lastCallAt = now
+  // <=, not <: at exactly one call per hold window the two cost the same, and
+  // holding avoids a signature and a settlement per call.
+  if (gap <= line.tickMs) rate.fastRun += 1
+  else rate.fastRun = 0
+  return rate.fastRun >= AUTO_FAST_RUN
+}
 
 const wsURL = () => {
   const u = new URL(UPSTREAM)
@@ -524,6 +562,16 @@ const callOnLine = async (name, args) => {
   }
   line.lastUse = Date.now()
   if (LINE_MODE === 'off') return payFirst(name, args)
+
+  // AUTO: slices until the caller proves it is worth holding, then a line for as
+  // long as that stays true. Holding an open line does not need re-proving on
+  // every call -- once it is open the time is already being bought.
+  if (LINE_MODE === 'auto') {
+    const fast = holdingIsCheaper()
+    if (!fast && !line.credential) return payFirst(name, args)
+    if (!fast && line.credential) dropLine('slower than the minimum hold — slices are cheaper')
+    if (!line.credential) return payFirst(name, args)
+  }
 
   // THE FIRST CALL ESTABLISHES THE CHANNEL AND PAYS ITS OWN PRICE.
   //
@@ -692,6 +740,10 @@ if (has('--help') || has('-h')) {
     'Env: X402_PRIVATE_KEY (required), X402_UPSTREAM, X402_MAX_SPEND (micro-USD, 0 = no cap),',
     '     X402_DEPOSIT_MULTIPLIER (default 400 → 400 × 250 = 100000 micro-USD = $0.10 of',
     '     refundable collateral), X402_LINE=auto|on|off, X402_SALT.',
+'     auto: buy per-call minimum holds until calls arrive faster than the',
+'     server minimum hold, then hold a line while that lasts. A held line',
+'     bills wall-clock whether you call or not, so holding a line for a',
+'     sparse caller costs several times what the slices would have.',
     '',
   ].join('\n'))
   process.exit(0)
