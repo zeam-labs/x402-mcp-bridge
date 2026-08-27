@@ -55,6 +55,46 @@ const NAME = process.env.X402_NAME ?? 'x402-bridge'
 // message you can act on.
 const log = (...a) => console.error('[x402-bridge]', ...a)
 
+// --help BEFORE ANYTHING ELSE, AND THAT IS THE POINT.
+//
+// This used to sit 700 lines down: after the key check, after the viem client,
+// after upstream.connect() and after loadTerms(). So `--help` demanded a funded
+// wallet AND made network calls to a payment endpoint just to print static text.
+// For a tool whose whole audience is agents deciding whether to use it, needing
+// a key before you can read the docs is backwards -- and reaching out to a seller
+// before the operator has agreed to anything is worse.
+//
+// Nothing below this block runs for --help. No key, no chain, no upstream.
+const argv = process.argv.slice(2)
+const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] ?? '') }
+const has = (name) => argv.includes(name)
+
+if (has('--help') || has('-h')) {
+  process.stdout.write([
+    'x402-mcp-bridge — pay for MCP tools with a wallet.',
+    '',
+    '  With your key exported as X402_PRIVATE_KEY:',
+    '',
+    '    npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
+    '    npx -y <this tarball> --tools',
+    '',
+    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
+    '',
+    'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
+    '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
+    '     X402_DEPOSIT_MULTIPLIER (default 400 × the SELLER\'S quoted per-call amount; against',
+    '     zeamprism that is 400 × 250 = $0.10 of refundable collateral), X402_LINE=auto|on|off,',
+    '     X402_SALT.',
+'     auto: buy per-call minimum holds until calls arrive faster than the',
+'     server minimum hold, then hold a line while that lasts. A held line',
+'     bills wall-clock whether you call or not, so holding a line for a',
+'     sparse caller costs several times what the slices would have.',
+    '',
+  ].join('\n'))
+  process.exit(0)
+}
+
+
 if (!KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)) {
   log('set X402_PRIVATE_KEY to a 0x-prefixed 32-byte key. It stays on this machine;')
   log('it signs payment vouchers locally and is never sent anywhere.')
@@ -775,34 +815,8 @@ process.on('disconnect', () => stopPaying('parent disconnected'))
 // `--refund` uses the line it is already holding to ask for the collateral back.
 // Same payment path as the MCP mode -- callOnLine -- so there is one code path
 // that spends money, not two.
-const argv = process.argv.slice(2)
-const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] ?? '') }
-const has = (name) => argv.includes(name)
-
-if (has('--help') || has('-h')) {
-  process.stdout.write([
-    'x402-mcp-bridge — pay for MCP tools with a wallet.',
-    '',
-    '  With your key exported as X402_PRIVATE_KEY:',
-    '',
-    '    npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
-    '    npx -y <this tarball> --tools',
-    '',
-    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
-    '',
-    'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
-    '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (default 400 × the SELLER\'S quoted per-call amount; against',
-    '     zeamprism that is 400 × 250 = $0.10 of refundable collateral), X402_LINE=auto|on|off,',
-    '     X402_SALT.',
-'     auto: buy per-call minimum holds until calls arrive faster than the',
-'     server minimum hold, then hold a line while that lasts. A held line',
-'     bills wall-clock whether you call or not, so holding a line for a',
-'     sparse caller costs several times what the slices would have.',
-    '',
-  ].join('\n'))
-  process.exit(0)
-}
+// argv/flag/has and --help are hoisted to the top of this file: reading the
+// help must not require a wallet or a network call. See there.
 
 if (has('--tools')) {
   const out = await upstream.listTools()
