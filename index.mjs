@@ -937,9 +937,24 @@ if (has('--refund')) {
   // "pay a tick first — that is what proves this channel is yours."
   await openLine()
   if (!line.socket) {
-    log('no line yet — paying one tick to prove this channel is ours, then asking for the refund')
-    try { await payFirst('tick', {}) } catch (e) { log(`tick failed: ${e.message}`) }
-    await openLine()
+    // WE USED TO PAY A TICK HERE, AND THAT PAYMENT COULD DEPOSIT.
+    //
+    // The socket will not open a line on a channel it has no record of, and the
+    // server's own remedy is "pay a tick first -- that is what proves this
+    // channel is yours." So this paid one. But a paid call on a channel without
+    // enough collateral DEPOSITS first, at depositMultiplier x the per-call
+    // amount -- 400 x 250 = 100,000 by default. So `--refund` could take another
+    // $0.10 of your money instead of returning any.
+    //
+    // A third-party auditor measured exactly that on 2026-08-26: a second
+    // --refund deposited 100,000 rather than refunding. For a product whose
+    // whole pitch is that the money is verifiable, a refund command that
+    // deposits is the worst failure available, and it is worse than --refund
+    // simply not working.
+    //
+    // So: this path never spends. If there is no line, we say so and point at
+    // the exit that needs nothing from us.
+    log('no line on this channel, and proving standing would cost a payment — not doing that in a refund')
   }
   if (!line.socket) {
     // SAY WHAT ACTUALLY WORKS INSTEAD OF FAILING BLANK.
@@ -951,7 +966,9 @@ if (has('--refund')) {
     // at the exit that DOES work is worth more than a bare failure.
     process.stderr.write([
       'This channel has no line the server recognises, so {op:"refund"} cannot prove it is yours.',
-      'That is our gap, not yours, and it is why --refund is not advertised in --help yet.',
+      'Proving it would mean making a payment, and a payment on a thin channel deposits more',
+      'collateral -- so asking for your money back would take another $0.10 of it. We will not do',
+      'that. This is our gap, not yours, and it is why --refund is not advertised in --help yet.',
       '',
       'The exit that always works needs nothing from us:',
       '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
