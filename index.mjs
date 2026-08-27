@@ -29,7 +29,7 @@ import { BatchSettlementEvmScheme } from '@x402/evm/batch-settlement/client'
 import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
 import { toClientEvmSigner } from '@x402/evm'
 import { privateKeyToAccount } from 'viem/accounts'
-import { createPublicClient, http, fallback, keccak256, toHex} from 'viem'
+import { createPublicClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
 import * as chains from 'viem/chains'
 import { mkdirSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -299,10 +299,56 @@ const saltOf = (raw) => {
   return keccak256(toHex(v))
 }
 
+// GIFT CARD MODE — spend a channel somebody else funded.
+//
+// Every channel carries `payer` (owns the money) and `payerAuthorizer` (may
+// spend it) as separate fields, and the escrow's claim checks the voucher
+// against payerAuthorizer alone. So a human can fund a channel and hand out a
+// key that spends it and cannot move it anywhere else: withdrawals are
+// hardcoded to pay `payer`. That is a prepaid card, and it is the only safe way
+// to give an agent money -- the alternative is handing over a private key.
+//
+// The client side did not support it. `payer` is taken from the signer's own
+// address, so a process holding only the card key computes a DIFFERENT channelId
+// than the one that was funded, finds nothing there, and reports
+// `insufficient_balance` while the money sits in plain sight. Verified against a
+// real funded channel before writing this.
+//
+// The fix is small because the split already exists in the protocol: give the
+// scheme a signer whose ADDRESS is the funder's, and let the card key sign the
+// vouchers. Nothing is faked -- the card genuinely is the payerAuthorizer, and
+// the escrow will only honour vouchers it signed.
+//
+//   X402_PAYER_ADDRESS   the human's address, the one that funded the channel
+//   X402_PRIVATE_KEY     the CARD key -- spends only, cannot withdraw elsewhere
+const CARD_PAYER = process.env.X402_PAYER_ADDRESS
+  ? getAddress(process.env.X402_PAYER_ADDRESS) : null
+
+// Deposits are the funder's business and the card cannot sign them: it does not
+// hold the payer key, by design. Failing here is CORRECT, and the message has to
+// say whose problem it is, because "signature invalid" would send an agent
+// hunting for a bug that is really an empty card.
+const cardSigner = CARD_PAYER ? {
+  address: CARD_PAYER,
+  readContract: pub.readContract.bind(pub),
+  signTypedData: () => {
+    throw new Error(
+      'this is a gift card and it cannot add funds: it holds a spending key, not ' +
+      `the key to ${CARD_PAYER}. The card is out of money — ask whoever funded it ` +
+      'to top it up (agent-wallet fund) or issue a new one.')
+  },
+} : null
+
+if (CARD_PAYER) {
+  log(`gift card mode — spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
+  log('this key can spend the card and send it home; it cannot move the money anywhere else')
+}
+
 const payments = new x402Client(selector).register(NETWORK,
-  new BatchSettlementEvmScheme(toClientEvmSigner(account, pub), {
+  new BatchSettlementEvmScheme(toClientEvmSigner(cardSigner ?? account, pub), {
     depositPolicy,
     storage: watchedStorage,
+    ...(CARD_PAYER ? { payerAuthorizer: account.address, voucherSigner: toClientEvmSigner(account, pub) } : {}),
     ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
   }))
 
