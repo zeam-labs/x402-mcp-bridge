@@ -30,7 +30,6 @@ import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file
 import { toClientEvmSigner } from '@x402/evm'
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, http, fallback, keccak256, toHex} from 'viem'
-import { quoteFromTerms, microUSDOf as microUSDOfPure } from './src/quote.mjs'
 import * as chains from 'viem/chains'
 import { mkdirSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -237,9 +236,35 @@ let spentMicroUSD = 0
 let quoteMicroUSD = null                 // set from the seller's own terms
 let spendUnit = 'micro-USD'              // what the numbers we report actually ARE
 
-// quoteFromTerms / microUSDOf live in src/quote.mjs so they can be tested without
-// an MCP server. See the note there for the bug they exist to prevent.
-const microUSDOf = (units) => microUSDOfPure(units, quoteMicroUSD, chosenAccept?.amount)
+// ONE FILE, DELIBERATELY. These were briefly split into src/quote.mjs to make
+// them unit-testable; that broke the product. build-bridge.sh ships exactly
+// index.mjs, README.md, LICENSE and package.json, and republishes index.mjs
+// alone as x402-mcp-bridge.mjs -- the URL this README tells an auditor to read
+// in full and run directly with no build step. A second file makes the tarball
+// throw on import and the published source incomplete. Testability does not get
+// to cost the buyer that.
+
+// Liberal in where it looks, strict about giving up. A server that does not say
+// what a call costs in USD gets NO GUESS.
+const quoteFromTerms = (j) => {
+  for (const c of [j?.rate?.deposit?.tickQuoteMicroUSD, j?.rate?.tickQuoteMicroUSD,
+                   j?.rate?.microUSDPerCall, j?.quoteMicroUSD]) {
+    const n = Number(c)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return null
+}
+
+const microUSDOf = (units) => {
+  // The entry the selector actually chose. Not accepts[0] -- that is USDC, and
+  // converting WETH units by a USDC quote is the same units bug in a new hat.
+  const quoted = Number(chosenAccept?.amount ?? 0)
+  // No published price, or nothing paid yet: count in the channel's own base
+  // units and SAY SO rather than dress them up as dollars. The cap still bounds
+  // something real; it just is not denominated in money.
+  if (quoteMicroUSD === null || !(quoted > 0)) return units
+  return units * (quoteMicroUSD / quoted)
+}
 
 const noteBilled = (ctx) => {
   try {

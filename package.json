@@ -25,8 +25,5 @@
     "type": "git",
     "url": "https://github.com/zeam-labs/x402-mcp-bridge"
   },
-  "homepage": "https://mcp.zeamprism.com/llms.txt",
-  "scripts": {
-    "test": "node --test test/*.test.mjs"
-  }
+  "homepage": "https://mcp.zeamprism.com/llms.txt"
 }

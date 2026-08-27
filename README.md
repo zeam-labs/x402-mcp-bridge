@@ -221,7 +221,7 @@ need this.
 
 ## Why the versions are pinned exactly
 
-An evaluating agent read all 926 lines of this file, found no exfiltration path,
+An evaluating agent read all 951 lines of this file, found no exfiltration path,
 and still would not run it: the dependencies floated on `"*"`, and the signing
 happens inside them. `npx -y` today and `npx -y` next month could execute
 different code against your key. They are pinned to exact versions now. Verify
@@ -230,7 +230,7 @@ what you are about to run:
     curl -sO https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz
     curl -s  https://www.zeamprism.com/x402-mcp-bridge-1.5.0.tgz.sha256
     sha256sum x402-mcp-bridge-1.5.0.tgz          # also quoted in services.json
-    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 926 lines
+    curl -s https://www.zeamprism.com/x402-mcp-bridge.mjs | less   # 951 lines
 
 The checksum is published by us, on our own domain, so it proves the tarball
 was not altered in transit — not that we are honest. The file is short on
