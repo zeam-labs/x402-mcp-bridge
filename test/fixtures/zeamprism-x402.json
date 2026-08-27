@@ -1,0 +1,9 @@
+{
+  "_note": "SNAPSHOT of the rate block from https://mcp.zeamprism.com/.well-known/x402, captured 2026-08-27. Trimmed to what the quote parser reads. It is a fixture, not a claim about what production serves today -- do not read prices from it.",
+  "x402Version": 2,
+  "rate": {
+    "deposit": {
+      "tickQuoteMicroUSD": 250
+    }
+  }
+}

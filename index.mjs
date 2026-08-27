@@ -30,12 +30,22 @@ import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file
 import { toClientEvmSigner } from '@x402/evm'
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, http, fallback, keccak256, toHex} from 'viem'
+import { quoteFromTerms, microUSDOf as microUSDOfPure } from './src/quote.mjs'
 import * as chains from 'viem/chains'
 import { mkdirSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const UPSTREAM = process.env.X402_MCP_URL ?? 'https://mcp.zeamprism.com/mcp'
+// X402_UPSTREAM IS NOT A NAME WE INVENTED FOR THIS LINE -- WE PUBLISHED IT.
+//
+// --help listed `X402_UPSTREAM` while this line read only X402_MCP_URL, so anyone
+// following our own help set a variable that did nothing and fell through to the
+// default: OUR paid endpoint. They would point the bridge at their server, reach
+// ours, and pay us. A documentation slip that misdirects a stranger's money is not
+// a documentation slip. The help is corrected below; the name we published is
+// honoured here so nobody who trusted it is quietly billed.
+const UPSTREAM =
+  process.env.X402_MCP_URL ?? process.env.X402_UPSTREAM ?? 'https://mcp.zeamprism.com/mcp'
 const KEY = process.env.X402_PRIVATE_KEY ?? process.env.PRISM_PRIVATE_KEY
 const NETWORK = process.env.X402_NETWORK ?? 'eip155:8453'
 const WANT = (process.env.X402_ASSET ?? '').toLowerCase()
@@ -44,6 +54,46 @@ const NAME = process.env.X402_NAME ?? 'x402-bridge'
 // corrupts the framing and the client reports a protocol error instead of a
 // message you can act on.
 const log = (...a) => console.error('[x402-bridge]', ...a)
+
+// --help BEFORE ANYTHING ELSE, AND THAT IS THE POINT.
+//
+// This used to sit 700 lines down: after the key check, after the viem client,
+// after upstream.connect() and after loadTerms(). So `--help` demanded a funded
+// wallet AND made network calls to a payment endpoint just to print static text.
+// For a tool whose whole audience is agents deciding whether to use it, needing
+// a key before you can read the docs is backwards -- and reaching out to a seller
+// before the operator has agreed to anything is worse.
+//
+// Nothing below this block runs for --help. No key, no chain, no upstream.
+const argv = process.argv.slice(2)
+const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] ?? '') }
+const has = (name) => argv.includes(name)
+
+if (has('--help') || has('-h')) {
+  process.stdout.write([
+    'x402-mcp-bridge — pay for MCP tools with a wallet.',
+    '',
+    '  With your key exported as X402_PRIVATE_KEY:',
+    '',
+    '    npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
+    '    npx -y <this tarball> --tools',
+    '',
+    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
+    '',
+    'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
+    '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
+    '     X402_DEPOSIT_MULTIPLIER (default 400 × the SELLER\'S quoted per-call amount; against',
+    '     zeamprism that is 400 × 250 = $0.10 of refundable collateral), X402_LINE=auto|on|off,',
+    '     X402_SALT.',
+'     auto: buy per-call minimum holds until calls arrive faster than the',
+'     server minimum hold, then hold a line while that lasts. A held line',
+'     bills wall-clock whether you call or not, so holding a line for a',
+'     sparse caller costs several times what the slices would have.',
+    '',
+  ].join('\n'))
+  process.exit(0)
+}
+
 
 if (!KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)) {
   log('set X402_PRIVATE_KEY to a 0x-prefixed 32-byte key. It stays on this machine;')
@@ -172,14 +222,24 @@ let spentMicroUSD = 0
 // channel's units, and that same call is `QUOTE_MICRO_USD` micro-USD, so
 // micro-USD = units * QUOTE_MICRO_USD / amount. Taken from the terms we already
 // fetched, so no price feed and no second opinion about what money is.
-const QUOTE_MICRO_USD = 250
-const microUSDOf = (units) => {
-  // The entry the selector actually chose. Not accepts[0] -- that is USDC, and
-  // converting WETH units by a USDC quote is the same units bug in a new hat.
-  const quoted = Number(chosenAccept?.amount ?? 0)
-  if (!(quoted > 0)) return units          // nothing paid yet: the cap still bounds something
-  return units * (QUOTE_MICRO_USD / quoted)
-}
+// THE PRICE HALF WAS HARDCODED TO ONE SELLER.
+//
+// This was a constant holding Prism's per-call price, while the comment above
+// claimed the conversion came from the terms. Half of it did: `accepts.amount` is
+// the seller's. The micro-USD half was ours, baked in.
+//
+// Against Prism that is exactly right. Against anything else it silently
+// MIS-SCALES, and in the direction that costs money: a seller charging 1000
+// micro-USD a call yields 250/1000, so every payment is recorded as a quarter of
+// what it cost and a $10 cap does not stop the agent until it has spent $40. A
+// spend cap calibrated by an assumption about somebody else's price is not a
+// spend cap. This bridge advertises itself for ANY x402 server, so it had to go.
+let quoteMicroUSD = null                 // set from the seller's own terms
+let spendUnit = 'micro-USD'              // what the numbers we report actually ARE
+
+// quoteFromTerms / microUSDOf live in src/quote.mjs so they can be tested without
+// an MCP server. See the note there for the bug they exist to prevent.
+const microUSDOf = (units) => microUSDOfPure(units, quoteMicroUSD, chosenAccept?.amount)
 
 const noteBilled = (ctx) => {
   try {
@@ -191,7 +251,7 @@ const noteBilled = (ctx) => {
   } catch { /* a record we cannot read is not a reason to stop paying */ }
   if (!MAX_SPEND || capReached || spentMicroUSD < MAX_SPEND) return
   capReached = true
-  log(`SPEND CAP REACHED — this run has spent ${spentMicroUSD} micro-USD against a cap of ` +
+  log(`SPEND CAP REACHED — this run has spent ${spentMicroUSD} ${spendUnit} against a cap of ` +
     `${MAX_SPEND}. Paying for nothing further. Raise or remove it with X402_MAX_SPEND.`)
   dropLine('spend cap reached')
 }
@@ -255,6 +315,16 @@ const loadTerms = async () => {
   tickAccepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length
     ? { x402Version: j.x402Version ?? 1, accepts: j.tickAccepts }
     : accepts                                    // an upstream that does not sell time
+  const q = quoteFromTerms(j)
+  if (q !== null) {
+    if (q !== quoteMicroUSD) log(`quote: ${q} micro-USD per call, from the seller's own terms`)
+    quoteMicroUSD = q; spendUnit = 'micro-USD'
+  } else if (quoteMicroUSD === null) {
+    spendUnit = 'base units of the paid asset'
+    log(`quote: this server publishes no micro-USD price, so X402_MAX_SPEND is read as ` +
+        `BASE UNITS OF THE ASSET, not dollars. Guessing a price here is how a spend cap ` +
+        `silently stops capping.`)
+  }
   return accepts
 }
 try { await loadTerms(); log(`terms cached from ${termsURL} — paying without probing`) }
@@ -745,32 +815,8 @@ process.on('disconnect', () => stopPaying('parent disconnected'))
 // `--refund` uses the line it is already holding to ask for the collateral back.
 // Same payment path as the MCP mode -- callOnLine -- so there is one code path
 // that spends money, not two.
-const argv = process.argv.slice(2)
-const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] ?? '') }
-const has = (name) => argv.includes(name)
-
-if (has('--help') || has('-h')) {
-  process.stdout.write([
-    'x402-mcp-bridge — pay for MCP tools with a wallet.',
-    '',
-    '  With your key exported as X402_PRIVATE_KEY:',
-    '',
-    '    npx -y <this tarball> --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
-    '    npx -y <this tarball> --tools',
-    '',
-    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
-    '',
-    'Env: X402_PRIVATE_KEY (required), X402_UPSTREAM, X402_MAX_SPEND (micro-USD, 0 = no cap),',
-    '     X402_DEPOSIT_MULTIPLIER (default 400 → 400 × 250 = 100000 micro-USD = $0.10 of',
-    '     refundable collateral), X402_LINE=auto|on|off, X402_SALT.',
-'     auto: buy per-call minimum holds until calls arrive faster than the',
-'     server minimum hold, then hold a line while that lasts. A held line',
-'     bills wall-clock whether you call or not, so holding a line for a',
-'     sparse caller costs several times what the slices would have.',
-    '',
-  ].join('\n'))
-  process.exit(0)
-}
+// argv/flag/has and --help are hoisted to the top of this file: reading the
+// help must not require a wallet or a network call. See there.
 
 if (has('--tools')) {
   const out = await upstream.listTools()
@@ -876,5 +922,5 @@ if (has('--refund')) {
 await server.connect(new StdioServerTransport())
 if (LINE_MODE === 'on' && channelId) await openLine()
 log(`bridge up on stdio — line mode ${LINE_MODE}${channelId ? '' : ' (channel opens on your first call)'}` +
-  ` | spend cap ${MAX_SPEND ? MAX_SPEND + ' micro-USD' : 'NONE (X402_MAX_SPEND=0)'}` +
+  ` | spend cap ${MAX_SPEND ? MAX_SPEND + ' ' + spendUnit : 'NONE (X402_MAX_SPEND=0)'}` +
   ' | stops when stdin closes')
