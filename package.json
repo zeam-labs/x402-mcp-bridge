@@ -1,0 +1,29 @@
+{
+  "name": "@zeam-labs/x402-mcp-bridge",
+  "version": "2.0.0",
+  "description": "Put a wallet in front of any x402-paid MCP server, and hold a metered line on the ones that sell time. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
+  "type": "module",
+  "bin": {
+    "x402-mcp-bridge": "index.mjs"
+  },
+  "main": "index.mjs",
+  "files": [
+    "index.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@x402/mcp": "2.22.0",
+    "@x402/evm": "2.22.0",
+    "viem": "2.55.16"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zeam-labs/x402-mcp-bridge"
+  },
+  "homepage": "https://mcp.zeamprism.com/llms.txt"
+}
