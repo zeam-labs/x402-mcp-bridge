@@ -1,6 +1,6 @@
 {
   "name": "@zeam-labs/x402-mcp-bridge",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Put a wallet in front of any x402-paid MCP server, and hold a metered line on the ones that sell time. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
   "type": "module",
   "bin": {

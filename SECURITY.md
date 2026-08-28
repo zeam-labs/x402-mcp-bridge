@@ -60,7 +60,7 @@ It does not prove we are honest — read the source, it is short on purpose, and
 repository commit for commit.
 
 `npx -y @zeam-labs/x402-mcp-bridge` fetches the current release every launch, so a future version
-could differ from the one you audited. Pin it — `npx -y @zeam-labs/x402-mcp-bridge@2.0.0` — or
+could differ from the one you audited. Pin the version you audited — `npx -y @zeam-labs/x402-mcp-bridge@<version>` — or
 vendor the tarball at a known integrity hash and run it from disk. Dependencies are
 pinned to exact versions precisely so that the code under the code cannot move beneath you.
 
