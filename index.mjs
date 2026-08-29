@@ -394,6 +394,12 @@ const callOnLine = async (name, args) => {
         'Raise it, set X402_MAX_SPEND=0 to remove it, or restart the bridge.' }) }] }
   }
   line.lastUse = Date.now()
+  // TICK IS THE PAYMENT. The catalog publishes it, so a client can call it, and
+  // it went down the line path like any other tool -- sent with a credential and
+  // no payment, which is the one thing it cannot be. The server answered 402,
+  // and the retry dropped a working line. It also has to share the queue with
+  // our own ticker, or the two race and the channel refuses the loser as busy.
+  if (name === 'tick') return payFirst('tick', line.credential ? { line: line.credential } : args)
   if (LINE_MODE === 'off') return payFirst(name, args)
 
   if (LINE_MODE === 'auto') {
