@@ -399,7 +399,14 @@ const callOnLine = async (name, args) => {
   // no payment, which is the one thing it cannot be. The server answered 402,
   // and the retry dropped a working line. It also has to share the queue with
   // our own ticker, or the two race and the channel refuses the loser as busy.
-  if (name === 'tick') return payFirst('tick', line.credential ? { line: line.credential } : args)
+  // A TICK NEEDS A LINE TO PAY FOR. Routing it straight to payFirst kept it off
+  // the line path, which is also the only thing that opens one -- so a client
+  // that funded and then only ticked never got a line and every tick was
+  // refused as matching none.
+  if (name === 'tick') {
+    if (!line.credential && channelId) await openLine()
+    return payFirst('tick', line.credential ? { line: line.credential } : args)
+  }
   if (LINE_MODE === 'off') return payFirst(name, args)
 
   if (LINE_MODE === 'auto') {

@@ -26,7 +26,7 @@ arguments this is still an MCP stdio server, which is what an MCP client wants.
 The server holds an idle line for **5000ms** and bills for that time. This client
 drops its own after **four tick intervals (1000ms)** of no use, so a pause costs
 you a reopen rather than four seconds of billing. So `closesAfterIdleMs: 5000` in
-`services.json` is the server's ceiling, not this client's behaviour — expect a
+`services.json` is the server's ceiling, not this client's behavior — expect a
 line to reopen during a slow session. `X402_LINE=off` pays per call instead.
 
 ## Why you need it
@@ -113,7 +113,7 @@ paying per call.
    That is an ordinary paid call and it buys the milliseconds since your previous
    tick.
 4. Every other call carries only `{line: "<credential>"}` and costs **nothing** —
-   no signature per call, nothing to serialise, and as many calls in flight at
+   no signature per call, nothing to serialize, and as many calls in flight at
    once as you like.
 
 Stop ticking and the line closes. An open line bills the whole time it is open,
@@ -132,7 +132,7 @@ If the server refuses a call because the line is gone — an ordinary rotate or
 idle close — the bridge **reopens the line and retries**, and only pays per call
 if that fails too. That ordering matters: falling straight through to per-call
 payment turns one closed line into a signed payment per in-flight call,
-serialised behind one channel, and when those run out of road they become unpaid
+serialized behind one channel, and when those run out of road they become unpaid
 requests that burn the hourly ceiling and lock a funded wallet out of its own
 channel. Measured before the fix, at 25-way concurrency: 3 of 12 calls served.
 After: 200 of 200 across 8 line deaths.
