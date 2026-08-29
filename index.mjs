@@ -193,6 +193,9 @@ log(`paying as ${account.address} -> ${UPSTREAM}`)
 const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
 let accepts = null
 let tickAccepts = null
+// The seller's line facts: how often to tick, and what a millisecond costs.
+// They belong to the service, not to one line, so they come from the manifest.
+let lineFacts = { tickMs: 250, microUSDPerMs: null }
 const loadTerms = async () => {
   const r = await fetch(termsURL)
   const j = await r.json()
@@ -201,6 +204,13 @@ const loadTerms = async () => {
   tickAccepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length
     ? { x402Version: j.x402Version ?? 1, accepts: j.tickAccepts }
     : accepts                                    // an upstream that does not sell time
+  const ln = j.limits?.line ?? j.payment?.limits?.line
+  lineFacts = {
+    tickMs: Number(ln?.tickMs) > 0 ? Number(ln.tickMs) : lineFacts.tickMs,
+    microUSDPerMs: Number(j.rate?.microUSDPerMillisecond) > 0
+      ? Number(j.rate.microUSDPerMillisecond) : lineFacts.microUSDPerMs,
+  }
+
   const q = quoteFromTerms(j)
   if (q !== null) {
     if (q !== quoteMicroUSD) log(`quote: ${q} micro-USD per call, from the seller's own terms`)
@@ -353,12 +363,13 @@ const openLine = () => {
         clearTimeout(give_up)
         line.socket = socket
         line.credential = m.credential
-        line.tickMs = Number(m.tickMs) || 250
+        line.tickMs = lineFacts.tickMs
         // A line that has just opened has not been idle. lastUse starts at 0, so
         // without this the first timer fire sees an age of Date.now() and drops
         // the line before anything can use it.
         line.lastUse = Date.now()
-        log(`line open — ${m.microUSDPerMs ?? 1} micro-USD/ms, collateral buys ${m.buysMs ?? '?'}ms`)
+        log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
+            `collateral buys ${m.buysMs ?? '?'}ms`)
         const first = tick()
         line.timer = setInterval(() => {
           // Stop paying for a line nobody is using. The server closes an unused
