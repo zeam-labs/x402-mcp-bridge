@@ -185,8 +185,8 @@ reaching it the line drops and further calls return
 Keep `X402_STATE_DIR` on disk. A client that reconnects to an existing channel
 with empty state pays a deposit it did not need, and can only recover if its
 signer can **read the chain** — so this bridge always gives the signer a reader.
-By default that reader is the upstream's own free `/bootstrap` surface, which
-means recovery costs nothing and needs no RPC of your own.
+By default that reader is the upstream's own free `/verify` surface, which means
+recovery costs nothing and needs no RPC of your own.
 
 Measured against `mcp.zeamprism.com`: fresh channel, first call 2.6s (one
 on-chain deposit) then ~180ms per call. State deliberately wiped: healed and

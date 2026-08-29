@@ -69,10 +69,12 @@ const stateDir = process.env.X402_STATE_DIR ??
   join(homedir(), '.x402-mcp-bridge', new URL(UPSTREAM).host, account.address.toLowerCase())
 mkdirSync(stateDir, { recursive: true })
 
+// The seller's free scoped RPC, last. It reaches their node without a wallet,
+// which is what makes it usable before you have paid them anything.
 const readers = [
   ...(process.env.X402_RPC_URL ? [process.env.X402_RPC_URL] : []),
   ...(chain.rpcUrls?.default?.http ?? []),
-  new URL('/bootstrap', UPSTREAM).toString(),
+  new URL('/verify', UPSTREAM).toString(),
 ]
 const pub = createPublicClient({ chain, transport: fallback(readers.map(u => http(u))) })
 log(`chain reads: ${readers.map(u => new URL(u).host).join(' -> ')}` +
