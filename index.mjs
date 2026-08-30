@@ -54,7 +54,6 @@ if (has('--help') || has('-h')) {
   process.exit(0)
 }
 
-
 if (!KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)) {
   log('set X402_PRIVATE_KEY to a 0x-prefixed 32-byte key. It stays on this machine;')
   log('it signs payment vouchers locally and is never sent anywhere.')
@@ -69,8 +68,6 @@ const stateDir = process.env.X402_STATE_DIR ??
   join(homedir(), '.x402-mcp-bridge', new URL(UPSTREAM).host, account.address.toLowerCase())
 mkdirSync(stateDir, { recursive: true })
 
-// The seller's free scoped RPC, last. It reaches their node without a wallet,
-// which is what makes it usable before you have paid them anything.
 const readers = [
   ...(process.env.X402_RPC_URL ? [process.env.X402_RPC_URL] : []),
   ...(chain.rpcUrls?.default?.http ?? []),
@@ -97,11 +94,8 @@ let channelId = null
 const watchedStorage = {
   get: (k) => storage.get(k),
   delete: (k) => storage.delete(k),
-  // Every write carries the seller's running total for this channel, so this is
-  // also where we learn what we have been billed -- see noteBilled below.
   set: (k, ctx) => { channelId = k; noteBilled(ctx); return storage.set(k, ctx) },
 }
-// And across restarts: the scheme persists one file per channel.
 try {
   const f = readdirSync(join(stateDir, 'client')).find((n) => n.endsWith('.json'))
   if (f) channelId = f.replace(/\.json$/, '')
@@ -118,8 +112,6 @@ let spentMicroUSD = 0
 let quoteMicroUSD = null                 // set from the seller's own terms
 let spendUnit = 'micro-USD'              // what the numbers we report actually ARE
 
-// Liberal in where it looks, strict about giving up. A server that does not say
-// what a call costs in USD gets NO GUESS.
 const quoteFromTerms = (j) => {
   for (const c of [j?.rate?.deposit?.tickQuoteMicroUSD, j?.rate?.tickQuoteMicroUSD,
                    j?.rate?.microUSDPerCall, j?.quoteMicroUSD]) {
@@ -130,8 +122,6 @@ const quoteFromTerms = (j) => {
 }
 
 const microUSDOf = (units) => {
-  // The entry the selector actually chose. Not accepts[0] -- that is USDC, and
-  // converting WETH units by a USDC quote is the same units bug in a new hat.
   const quoted = Number(chosenAccept?.amount ?? 0)
   if (quoteMicroUSD === null || !(quoted > 0)) return units
   return units * (quoteMicroUSD / quoted)
@@ -193,8 +183,6 @@ log(`paying as ${account.address} -> ${UPSTREAM}`)
 const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
 let accepts = null
 let tickAccepts = null
-// The seller's line facts: how often to tick, and what a millisecond costs.
-// They belong to the service, not to one line, so they come from the manifest.
 let lineFacts = { tickMs: 250, microUSDPerMs: null }
 const loadTerms = async () => {
   const r = await fetch(termsURL)
@@ -245,8 +233,6 @@ if (coldStart) log('no local channel state — probing once to learn where this 
 const payNow = async (name, args) => {
   if (coldStart) {
     coldStart = false
-    // autoPayment handles the 402 and pays the retry, and the 402 is what
-    // carries the channel state the client is missing.
     return upstream.callTool(name, args)
   }
   const terms = name === 'tick' ? tickAccepts : accepts
@@ -302,19 +288,15 @@ const AUTO_SLOW_RUN = Number(process.env.X402_AUTO_SLOW_RUN ?? 4)
 
 const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null }
 
-// Rolling view of how fast the caller is actually going.
 const rate = { lastCallAt: 0, fastRun: 0, slowRun: 0 }
 
 function holdingIsCheaper() {
   const now = Date.now()
   const gap = rate.lastCallAt ? now - rate.lastCallAt : Infinity
   rate.lastCallAt = now
-  // <=, not <: at exactly one call per hold window the two cost the same, and
-  // holding avoids a signature and a settlement per call.
   if (gap <= line.tickMs) { rate.fastRun += 1; rate.slowRun = 0 }
   else { rate.slowRun += 1; rate.fastRun = 0 }
 
-  // Already holding? Keep holding until several gaps in a row say otherwise.
   if (line.credential) return rate.slowRun < AUTO_SLOW_RUN
   return rate.fastRun >= AUTO_FAST_RUN
 }
@@ -357,23 +339,32 @@ const openLine = () => {
     let socket
     try { socket = new WebSocket(wsURL()) } catch (e) { log(`line: ${e.message}`); return resolve(null) }
     const give_up = setTimeout(() => { try { socket.close() } catch {} ; resolve(null) }, 10_000)
-    socket.onmessage = (ev) => {
+    socket.onmessage = async (ev) => {
       let m; try { m = JSON.parse(String(ev.data)) } catch { return }
+      if (m.op === 'challenge') {
+        try {
+          const signature = await account.signMessage({ message: m.message })
+          socket.send(JSON.stringify({ op: 'prove', signature }))
+        } catch (e) {
+          clearTimeout(give_up); log(`line: cannot sign open challenge — ${e.message}`)
+          try { socket.close() } catch {}; resolve(null)
+        }
+        return
+      }
+      if (m.op === 'open_failed') {
+        clearTimeout(give_up); log(`line: open refused — ${m.error ?? m.why}`)
+        try { socket.close() } catch {}; resolve(null); return
+      }
       if (m.op === 'opened') {
         clearTimeout(give_up)
         line.socket = socket
         line.credential = m.credential
         line.tickMs = lineFacts.tickMs
-        // A line that has just opened has not been idle. lastUse starts at 0, so
-        // without this the first timer fire sees an age of Date.now() and drops
-        // the line before anything can use it.
         line.lastUse = Date.now()
         log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
             `collateral buys ${m.buysMs ?? '?'}ms`)
         const first = tick()
         line.timer = setInterval(() => {
-          // Stop paying for a line nobody is using. The server closes an unused
-          // line on its own; this is us not paying for the window before it does.
           if (LINE_MODE === 'auto' && Date.now() - line.lastUse > line.tickMs * 4) return dropLine('idle')
           tick()
         }, line.tickMs)
@@ -407,15 +398,6 @@ const callOnLine = async (name, args) => {
         'Raise it, set X402_MAX_SPEND=0 to remove it, or restart the bridge.' }) }] }
   }
   line.lastUse = Date.now()
-  // TICK IS THE PAYMENT. The catalog publishes it, so a client can call it, and
-  // it went down the line path like any other tool -- sent with a credential and
-  // no payment, which is the one thing it cannot be. The server answered 402,
-  // and the retry dropped a working line. It also has to share the queue with
-  // our own ticker, or the two race and the channel refuses the loser as busy.
-  // A TICK NEEDS A LINE TO PAY FOR. Routing it straight to payFirst kept it off
-  // the line path, which is also the only thing that opens one -- so a client
-  // that funded and then only ticked never got a line and every tick was
-  // refused as matching none.
   if (name === 'tick') {
     if (!line.credential && channelId) await openLine()
     return payFirst('tick', line.credential ? { line: line.credential } : args)
@@ -489,7 +471,6 @@ if (has('--tools')) {
 if (has('--call')) {
   const tool = flag('--call')
   if (!tool) { process.stderr.write('--call needs a tool name\n'); process.exit(2) }
-  // The JSON argument is optional: several tools take none.
   const rawArgs = argv[argv.indexOf('--call') + 2]
   let args = {}
   if (rawArgs && !rawArgs.startsWith('--')) {
@@ -512,9 +493,6 @@ if (has('--call')) {
 if (has('--refund')) {
   if (!channelId) { process.stderr.write('no channel to refund — nothing has been bought with this key and salt\n'); process.exit(2) }
 
-  // The channel is proved by signing for it, not by holding a session open. No
-  // line, no tick, no keep-warm: one message, one answer. Under a gift card the
-  // key here is the payerAuthorizer, which the server accepts for the same reason.
   const issued = new Date().toISOString()
   const message = `ZEAM Prism refund\nchannel: ${String(channelId).toLowerCase()}\nissued: ${issued}`
   const signature = await account.signMessage({ message })

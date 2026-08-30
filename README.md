@@ -87,11 +87,9 @@ accept EIP-3009, which needs no approval at all.
 
 The stock x402 flow sends every call **unpaid**, reads the 402 it comes back
 with, and then sends the same call again carrying payment. Two network round
-trips for one call. At a 130ms round trip that is 260ms instead of 130ms — and on
-a meter that bills time on the line, the buyer pays for a handshake nobody
-needed. Those probes are also unpaid calls, and a server may cap how many of
-those it will answer, which is how a funded wallet gets locked out of a channel
-it has money in.
+trips for one call. At a 130ms round trip that is 260ms instead of 130ms. Those
+probes are also unpaid calls, and a server may cap how many of those it will
+answer, which is how a funded wallet gets locked out of a channel it has money in.
 
 The terms are static and published, so this bridge reads them once from
 `/.well-known/x402` at connect and attaches payment to its **first** request.
@@ -104,21 +102,21 @@ old probe-then-pay path rather than dropping your call.
 
 ## Holding a line
 
-Upstream sells **time**, not calls, and there is a cheaper way to buy it than
-paying per call.
+A server may sell **time** rather than calls, with a cheaper path than paying
+per call. The pricing is the server's — read it in its published terms — and this
+bridge drives it for you:
 
 1. Deposit once — your first paid call does it for you.
-2. Open a line on the endpoint's `/pay` websocket. It hands back a credential.
+2. Open a line on the endpoint's `/pay` websocket. If the server challenges,
+   the bridge signs the challenge with your key to prove the channel is yours,
+   and gets back a credential.
 3. Call the `tick` tool on a steady cadence, passing `{line: "<credential>"}`.
-   That is an ordinary paid call and it buys the milliseconds since your previous
-   tick.
-4. Every other call carries only `{line: "<credential>"}` and costs **nothing** —
-   no signature per call, nothing to serialize, and as many calls in flight at
-   once as you like.
+   That is an ordinary paid call and it pays the server for more time.
+4. Every other call carries only `{line: "<credential>"}` and no payment, and as
+   many can be in flight at once as you like.
 
-Stop ticking and the line closes. An open line bills the whole time it is open,
-so a line you forget costs at most one idle-close window past your last tick and
-then stops existing.
+Stop ticking and the line lapses. What the server charges, when a line lapses,
+and whether unused time is kept are the server's to state, not this bridge's.
 
 **This bridge drives a line for you.** `X402_LINE` controls it:
 
@@ -146,10 +144,9 @@ it happens once; lose it, or run the same key on a second machine, and it happen
 again on the next call and then not after.
 
 Two things worth knowing if you write your own client. Pay a tick against
-`tickAccepts` from `/.well-known/x402` — same figure as a call, and the ceiling on
-one tick. And never send two ticks at once: a voucher signs a cumulative total, so
-a channel carries one payment at a time and an overlapping tick is refused as
-`channel_busy`.
+`tickAccepts` from `/.well-known/x402`, not `accepts`. And never send two ticks at
+once: a voucher signs a cumulative total, so a channel carries one payment at a
+time and an overlapping tick is refused as `channel_busy`.
 
 ## Configuration
 
