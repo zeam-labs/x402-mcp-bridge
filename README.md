@@ -158,7 +158,7 @@ time and an overlapping tick is refused as `channel_busy`.
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | `400` | collateral a deposit locks in escrow, as a multiple of the seller's quote for the opening call. That opening quote carries the one-time open fee, so against zeamprism the default locks ~$0.70 of **refundable** collateral — it leaves your wallet when you open the channel and returns on refund. Lower it if that is more than you want committed; the scheme refuses below 3x. |
+| `X402_DEPOSIT_MULTIPLIER` | *scheme default* | how much **refundable** collateral to lock, as a multiple of the seller's quote for the opening call. Unset, the x402 scheme sizes it (minimum 3); raise it to top up less often, lower it to commit less. It leaves your wallet when you open the channel and comes back on refund — it is not the price. |
 
 ## It stops spending when you stop watching
 
