@@ -208,8 +208,7 @@ const loadTerms = async () => {
   } else if (quoteMicroUSD === null) {
     spendUnit = 'base units of the paid asset'
     log(`quote: this server publishes no micro-USD price, so X402_MAX_SPEND is read as ` +
-        `BASE UNITS OF THE ASSET, not dollars. Guessing a price here is how a spend cap ` +
-        `silently stops capping.`)
+        `base units of the asset, not dollars.`)
   }
   return accepts
 }
@@ -521,10 +520,9 @@ if (has('--refund')) {
       'The exit that always works needs nothing from us:',
       '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
       'We also watch for that first call and return the collateral ourselves, at our gas,',
-      'so you usually do not have to send the second transaction. We do NOT promise when:',
-      'a third-party auditor measured 920 seconds on 2026-08-26, i.e. just after the delay',
-      'elapsed. Plan against the delay. The escrow gates withdrawal to you alone, so your',
-      'unspent collateral is safe either way.',
+      'so you usually do not have to send the second transaction — but not on a promised',
+      'schedule; it can lag until just past the delay window. Plan against the delay. The',
+      'escrow gates withdrawal to you alone, so your unspent collateral is safe either way.',
       '',
     ].join('\n'))
   }
