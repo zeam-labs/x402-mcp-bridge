@@ -42,8 +42,10 @@ if (has('--help') || has('-h')) {
     '',
     'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
     '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (default 400 × the SELLER\'S quoted per-call amount; against',
-    '     zeamprism that is 400 × 250 = $0.10 of refundable collateral), X402_LINE=auto|on|off,',
+    '     X402_DEPOSIT_MULTIPLIER (default 400; the deposit is this times the seller\'s',
+    '     quote for the OPENING call, held as refundable collateral — against',
+    '     zeamprism ~$0.70, since the opening quote carries the one-time open',
+    '     fee), X402_LINE=auto|on|off,',
     '     X402_SALT.',
 '     auto: buy per-call minimum holds until calls arrive faster than the',
 '     server minimum hold, then hold a line while that lasts. A held line',
@@ -114,7 +116,7 @@ let spendUnit = 'micro-USD'              // what the numbers we report actually 
 
 const quoteFromTerms = (j) => {
   for (const c of [j?.rate?.deposit?.tickQuoteMicroUSD, j?.rate?.tickQuoteMicroUSD,
-                   j?.rate?.microUSDPerCall, j?.quoteMicroUSD]) {
+                   j?.rate?.microUSDPerCall, j?.rate?.microUSDPerBlock, j?.quoteMicroUSD]) {
     const n = Number(c)
     if (Number.isFinite(n) && n > 0) return n
   }
