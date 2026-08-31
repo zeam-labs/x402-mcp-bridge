@@ -101,7 +101,7 @@ const watchedStorage = {
 try {
   const f = readdirSync(join(stateDir, 'client')).find((n) => n.endsWith('.json'))
   if (f) channelId = f.replace(/\.json$/, '')
-} catch { /* first run, nothing to recover */ }
+} catch {}
 
 const depositPolicy = { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 400) }
 
@@ -111,8 +111,8 @@ let capReached = false
 let startedAt = null
 let spentMicroUSD = 0
 
-let quoteMicroUSD = null                 // set from the seller's own terms
-let spendUnit = 'micro-USD'              // what the numbers we report actually ARE
+let quoteMicroUSD = null
+let spendUnit = 'micro-USD'
 
 const quoteFromTerms = (j) => {
   for (const c of [j?.rate?.deposit?.tickQuoteMicroUSD, j?.rate?.tickQuoteMicroUSD,
@@ -136,7 +136,7 @@ const noteBilled = (ctx) => {
     if (startedAt === null) startedAt = charged
     const spent = microUSDOf(charged - startedAt)
     if (spent > spentMicroUSD) spentMicroUSD = spent
-  } catch { /* a record we cannot read is not a reason to stop paying */ }
+  } catch {}
   if (!MAX_SPEND || capReached || spentMicroUSD < MAX_SPEND) return
   capReached = true
   log(`SPEND CAP REACHED — this run has spent ${spentMicroUSD} ${spendUnit} against a cap of ` +
@@ -193,7 +193,7 @@ const loadTerms = async () => {
   accepts = { x402Version: j.x402Version ?? 1, accepts: j.accepts }
   tickAccepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length
     ? { x402Version: j.x402Version ?? 1, accepts: j.tickAccepts }
-    : accepts                                    // an upstream that does not sell time
+    : accepts
   const ln = j.limits?.line ?? j.payment?.limits?.line
   lineFacts = {
     tickMs: Number(ln?.tickMs) > 0 ? Number(ln.tickMs) : lineFacts.tickMs,
@@ -219,7 +219,7 @@ catch (e) { log(`could not cache terms (${e.message}); falling back to probe-the
 let paymentQueue = Promise.resolve()
 const oneAtATime = (fn) => {
   const run = paymentQueue.then(fn, fn)
-  paymentQueue = run.then(() => {}, () => {})       // a failure must not poison the queue
+  paymentQueue = run.then(() => {}, () => {})
   return run
 }
 
@@ -246,13 +246,13 @@ const payNow = async (name, args) => {
       if (explainPermit2(out)) return out
       if (refusedPayment(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
-        if (channelId) { try { await watchedStorage.delete(channelId) } catch { /* it will be rebuilt */ } }
+        if (channelId) { try { await watchedStorage.delete(channelId) } catch {} }
         return upstream.callTool(name, args)
       }
       return out
     } catch (e) {
       if (attempt === 2) { log(`pay-first failed twice (${e.message}); using probe path`); return upstream.callTool(name, args) }
-      try { await loadTerms() } catch { /* keep the old terms and let attempt 2 decide */ }
+      try { await loadTerms() } catch {}
     }
   }
 }
@@ -313,7 +313,7 @@ const wsURL = () => {
 
 const dropLine = (why) => {
   if (line.timer) { clearInterval(line.timer); line.timer = null }
-  try { line.socket?.close() } catch { /* already gone */ }
+  try { line.socket?.close() } catch {}
   if (line.credential) log(`line closed (${why})`)
   line.socket = null
   line.credential = null
@@ -336,7 +336,7 @@ const tick = async () => {
 
 const openLine = () => {
   if (line.credential || line.opening) return line.opening
-  if (!channelId) return null                    // no channel yet; the first paid call makes one
+  if (!channelId) return null
   line.opening = new Promise((resolve) => {
     let socket
     try { socket = new WebSocket(wsURL()) } catch (e) { log(`line: ${e.message}`); return resolve(null) }
@@ -381,7 +381,7 @@ const openLine = () => {
     }
     socket.onopen = () => socket.send(JSON.stringify({ op: 'open', channelId }))
     socket.onclose = () => { clearTimeout(give_up); dropLine('socket closed'); resolve(null) }
-    socket.onerror = () => { /* onclose follows and does the work */ }
+    socket.onerror = () => {}
   }).finally(() => { line.opening = null })
   return line.opening
 }
