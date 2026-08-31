@@ -62,9 +62,8 @@ settlement contract, withdrawable by your side of the channel alone: the
 for most clients is the same key but need not be.
 
 That escrow is not the seller's. It is x402's own batch-settlement contract,
-hardcoded in [`@x402/evm`](https://www.npmjs.com/package/@x402/evm) and published
-to npm by Coinbase in `2.12.0` on 2026-05-13 — two days before the contract
-existed on Base. No owner, no pause, no upgrade, no sweep.
+hardcoded in [`@x402/evm`](https://www.npmjs.com/package/@x402/evm), published by
+Coinbase. No owner, no pause, no upgrade, no sweep.
 
 ```
 npm pack @x402/evm@2.12.0 && grep -rl 0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003 package/
@@ -92,9 +91,8 @@ probes are also unpaid calls, and a server may cap how many of those it will
 answer, which is how a funded wallet gets locked out of a channel it has money in.
 
 The terms are static and published, so this bridge reads them once from
-`/.well-known/x402` at connect and attaches payment to its **first** request.
-Measured against the same server: six calls issued six 402 challenges the old
-way, and zero the new way.
+`/.well-known/x402` at connect and attaches payment to its **first** request —
+no unpaid probe, no extra round trip.
 
 A refused payment re-reads the terms and retries once, because quotes for
 non-stable assets move with the oracle. Anything still failing falls back to the
@@ -132,8 +130,7 @@ if that fails too. That ordering matters: falling straight through to per-call
 payment turns one closed line into a signed payment per in-flight call,
 serialized behind one channel, and when those run out of road they become unpaid
 requests that burn the hourly ceiling and lock a funded wallet out of its own
-channel. Measured before the fix, at 25-way concurrency: 3 of 12 calls served.
-After: 200 of 200 across 8 line deaths.
+channel.
 
 **Cold starts.** A voucher signs a *cumulative* total, and that total is not on
 the chain — the escrow knows your balance and what has been claimed, not what has
@@ -161,7 +158,7 @@ time and an overlapping tick is refused as `channel_busy`.
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | `400` | how much collateral a deposit puts in escrow, as a multiple of the quote. **The quote is 250 micro-USD, so the default deposit is 400 x 250 = 100,000 micro-USD = $0.10.** That is refundable collateral, not a charge — but it leaves your wallet the moment you open a channel, and no page said the number out loud until a cold buyer had to multiply two figures from two documents to find out what plugging in the config would cost it. Lower it if $0.10 is more than you want committed; the scheme refuses below 3x. |
+| `X402_DEPOSIT_MULTIPLIER` | `400` | collateral a deposit locks in escrow, as a multiple of the seller's quote for the opening call. That opening quote carries the one-time open fee, so against zeamprism the default locks ~$0.70 of **refundable** collateral — it leaves your wallet when you open the channel and returns on refund. Lower it if that is more than you want committed; the scheme refuses below 3x. |
 
 ## It stops spending when you stop watching
 
@@ -185,9 +182,9 @@ signer can **read the chain** — so this bridge always gives the signer a reade
 By default that reader is the upstream's own free `/verify` surface, which means
 recovery costs nothing and needs no RPC of your own.
 
-Measured against `mcp.zeamprism.com`: fresh channel, first call 2.6s (one
-on-chain deposit) then ~180ms per call. State deliberately wiped: healed and
-served in 3.9s, then ~150ms.
+The first call also makes the on-chain deposit, so it is slower than the rest;
+every call after it is fast. Losing state adds one more deposit-time call, then
+it is fast again.
 
 ## What it does not do
 
