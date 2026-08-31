@@ -158,15 +158,14 @@ const cardSigner = CARD_PAYER ? {
   readContract: pub.readContract.bind(pub),
   signTypedData: () => {
     throw new Error(
-      'this is a gift card and it cannot add funds: it holds a spending key, not ' +
-      `the key to ${CARD_PAYER}. The card is out of money — ask whoever funded it ` +
-      'to top it up (agent-wallet fund) or issue a new one.')
+      `this key spends ${CARD_PAYER}'s channel but cannot add funds to it — it is a ` +
+      'spending key, not that wallet\'s key. Top up from the wallet that owns the channel.')
   },
 } : null
 
 if (CARD_PAYER) {
-  log(`gift card mode — spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
-  log('this key can spend the card and send it home; it cannot move the money anywhere else')
+  log(`spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
+  log('this key can spend that channel and return it; it cannot move the money elsewhere')
 }
 
 const payments = new x402Client(selector).register(NETWORK,
