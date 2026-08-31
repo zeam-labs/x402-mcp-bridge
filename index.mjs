@@ -42,8 +42,10 @@ if (has('--help') || has('-h')) {
     '',
     'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
     '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (default 400 × the SELLER\'S quoted per-call amount; against',
-    '     zeamprism that is 400 × 250 = $0.10 of refundable collateral), X402_LINE=auto|on|off,',
+    '     X402_DEPOSIT_MULTIPLIER (default 400; the deposit is this times the seller\'s',
+    '     quote for the OPENING call, held as refundable collateral — against',
+    '     zeamprism ~$0.70, since the opening quote carries the one-time open',
+    '     fee), X402_LINE=auto|on|off,',
     '     X402_SALT.',
 '     auto: buy per-call minimum holds until calls arrive faster than the',
 '     server minimum hold, then hold a line while that lasts. A held line',
@@ -99,7 +101,7 @@ const watchedStorage = {
 try {
   const f = readdirSync(join(stateDir, 'client')).find((n) => n.endsWith('.json'))
   if (f) channelId = f.replace(/\.json$/, '')
-} catch { /* first run, nothing to recover */ }
+} catch {}
 
 const depositPolicy = { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 400) }
 
@@ -109,12 +111,12 @@ let capReached = false
 let startedAt = null
 let spentMicroUSD = 0
 
-let quoteMicroUSD = null                 // set from the seller's own terms
-let spendUnit = 'micro-USD'              // what the numbers we report actually ARE
+let quoteMicroUSD = null
+let spendUnit = 'micro-USD'
 
 const quoteFromTerms = (j) => {
   for (const c of [j?.rate?.deposit?.tickQuoteMicroUSD, j?.rate?.tickQuoteMicroUSD,
-                   j?.rate?.microUSDPerCall, j?.quoteMicroUSD]) {
+                   j?.rate?.microUSDPerCall, j?.rate?.microUSDPerBlock, j?.quoteMicroUSD]) {
     const n = Number(c)
     if (Number.isFinite(n) && n > 0) return n
   }
@@ -134,7 +136,7 @@ const noteBilled = (ctx) => {
     if (startedAt === null) startedAt = charged
     const spent = microUSDOf(charged - startedAt)
     if (spent > spentMicroUSD) spentMicroUSD = spent
-  } catch { /* a record we cannot read is not a reason to stop paying */ }
+  } catch {}
   if (!MAX_SPEND || capReached || spentMicroUSD < MAX_SPEND) return
   capReached = true
   log(`SPEND CAP REACHED — this run has spent ${spentMicroUSD} ${spendUnit} against a cap of ` +
@@ -156,15 +158,14 @@ const cardSigner = CARD_PAYER ? {
   readContract: pub.readContract.bind(pub),
   signTypedData: () => {
     throw new Error(
-      'this is a gift card and it cannot add funds: it holds a spending key, not ' +
-      `the key to ${CARD_PAYER}. The card is out of money — ask whoever funded it ` +
-      'to top it up (agent-wallet fund) or issue a new one.')
+      `this key spends ${CARD_PAYER}'s channel but cannot add funds to it — it is a ` +
+      'spending key, not that wallet\'s key. Top up from the wallet that owns the channel.')
   },
 } : null
 
 if (CARD_PAYER) {
-  log(`gift card mode — spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
-  log('this key can spend the card and send it home; it cannot move the money anywhere else')
+  log(`spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
+  log('this key can spend that channel and return it; it cannot move the money elsewhere')
 }
 
 const payments = new x402Client(selector).register(NETWORK,
@@ -191,7 +192,7 @@ const loadTerms = async () => {
   accepts = { x402Version: j.x402Version ?? 1, accepts: j.accepts }
   tickAccepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length
     ? { x402Version: j.x402Version ?? 1, accepts: j.tickAccepts }
-    : accepts                                    // an upstream that does not sell time
+    : accepts
   const ln = j.limits?.line ?? j.payment?.limits?.line
   lineFacts = {
     tickMs: Number(ln?.tickMs) > 0 ? Number(ln.tickMs) : lineFacts.tickMs,
@@ -206,8 +207,7 @@ const loadTerms = async () => {
   } else if (quoteMicroUSD === null) {
     spendUnit = 'base units of the paid asset'
     log(`quote: this server publishes no micro-USD price, so X402_MAX_SPEND is read as ` +
-        `BASE UNITS OF THE ASSET, not dollars. Guessing a price here is how a spend cap ` +
-        `silently stops capping.`)
+        `base units of the asset, not dollars.`)
   }
   return accepts
 }
@@ -217,7 +217,7 @@ catch (e) { log(`could not cache terms (${e.message}); falling back to probe-the
 let paymentQueue = Promise.resolve()
 const oneAtATime = (fn) => {
   const run = paymentQueue.then(fn, fn)
-  paymentQueue = run.then(() => {}, () => {})       // a failure must not poison the queue
+  paymentQueue = run.then(() => {}, () => {})
   return run
 }
 
@@ -244,13 +244,13 @@ const payNow = async (name, args) => {
       if (explainPermit2(out)) return out
       if (refusedPayment(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
-        if (channelId) { try { await watchedStorage.delete(channelId) } catch { /* it will be rebuilt */ } }
+        if (channelId) { try { await watchedStorage.delete(channelId) } catch {} }
         return upstream.callTool(name, args)
       }
       return out
     } catch (e) {
       if (attempt === 2) { log(`pay-first failed twice (${e.message}); using probe path`); return upstream.callTool(name, args) }
-      try { await loadTerms() } catch { /* keep the old terms and let attempt 2 decide */ }
+      try { await loadTerms() } catch {}
     }
   }
 }
@@ -311,7 +311,7 @@ const wsURL = () => {
 
 const dropLine = (why) => {
   if (line.timer) { clearInterval(line.timer); line.timer = null }
-  try { line.socket?.close() } catch { /* already gone */ }
+  try { line.socket?.close() } catch {}
   if (line.credential) log(`line closed (${why})`)
   line.socket = null
   line.credential = null
@@ -334,7 +334,7 @@ const tick = async () => {
 
 const openLine = () => {
   if (line.credential || line.opening) return line.opening
-  if (!channelId) return null                    // no channel yet; the first paid call makes one
+  if (!channelId) return null
   line.opening = new Promise((resolve) => {
     let socket
     try { socket = new WebSocket(wsURL()) } catch (e) { log(`line: ${e.message}`); return resolve(null) }
@@ -379,7 +379,7 @@ const openLine = () => {
     }
     socket.onopen = () => socket.send(JSON.stringify({ op: 'open', channelId }))
     socket.onclose = () => { clearTimeout(give_up); dropLine('socket closed'); resolve(null) }
-    socket.onerror = () => { /* onclose follows and does the work */ }
+    socket.onerror = () => {}
   }).finally(() => { line.opening = null })
   return line.opening
 }
@@ -519,10 +519,9 @@ if (has('--refund')) {
       'The exit that always works needs nothing from us:',
       '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
       'We also watch for that first call and return the collateral ourselves, at our gas,',
-      'so you usually do not have to send the second transaction. We do NOT promise when:',
-      'a third-party auditor measured 920 seconds on 2026-08-26, i.e. just after the delay',
-      'elapsed. Plan against the delay. The escrow gates withdrawal to you alone, so your',
-      'unspent collateral is safe either way.',
+      'so you usually do not have to send the second transaction — but not on a promised',
+      'schedule; it can lag until just past the delay window. Plan against the delay. The',
+      'escrow gates withdrawal to you alone, so your unspent collateral is safe either way.',
       '',
     ].join('\n'))
   }
