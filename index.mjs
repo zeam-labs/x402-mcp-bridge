@@ -16,6 +16,25 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 
+// A pass is four values — endpoint, spending key, whose channel, which channel.
+// Asking a person to carry four is how one of them arrives wrong, so a pass may
+// arrive as one string and expand here, before anything reads the environment.
+if (process.env.X402_PASS) {
+  const raw = process.env.X402_PASS.trim().replace(/^pass_/, '')
+  let p
+  try {
+    p = JSON.parse(Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
+  } catch {
+    throw new Error('X402_PASS is not a pass string — copy it again from the pass that issued it')
+  }
+  const missing = ['u', 'k', 'p', 's'].filter((f) => !p[f])
+  if (missing.length) throw new Error(`X402_PASS is incomplete (missing ${missing.join(', ')})`)
+  process.env.X402_MCP_URL ??= p.u
+  process.env.X402_PRIVATE_KEY ??= p.k
+  process.env.X402_PAYER_ADDRESS ??= p.p
+  process.env.X402_SALT ??= p.s
+}
+
 const UPSTREAM =
   process.env.X402_MCP_URL ?? process.env.X402_UPSTREAM ?? 'https://mcp.zeamprism.com/mcp'
 const KEY = process.env.X402_PRIVATE_KEY ?? process.env.PRISM_PRIVATE_KEY
@@ -45,7 +64,7 @@ if (has('--help') || has('-h')) {
     '     X402_DEPOSIT_MULTIPLIER (refundable collateral to lock, as a multiple of',
     '     the opening quote; unset uses the x402 scheme default, minimum 3),',
     '     X402_LINE=auto|on|off,',
-    '     X402_SALT.',
+    '     X402_SALT, or X402_PASS to carry all four of those as one string.',
 '     auto: buy per-call minimum holds until calls arrive faster than the',
 '     server minimum hold, then hold a line while that lasts. A held line',
 '     bills wall-clock whether you call or not, so holding a line for a',

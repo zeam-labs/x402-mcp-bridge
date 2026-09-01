@@ -52,6 +52,21 @@ client talks to this; this talks money upstream.
 }
 ```
 
+A pass someone gave you is four values — endpoint, spending key, whose channel,
+which channel — and carries as one string instead:
+
+```json
+{
+  "mcpServers": {
+    "prism": {
+      "command": "npx",
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge"],
+      "env": { "X402_PASS": "pass_..." }
+    }
+  }
+}
+```
+
 Verify what you are about to run before you point a funded key at it; see
 [below](#why-the-versions-are-pinned-exactly).
 
