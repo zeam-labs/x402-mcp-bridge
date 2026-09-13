@@ -138,6 +138,24 @@ alive.
 `test/viem.mjs` drives it against a live server with real money and checks each
 of those claims.
 
+The same wallet behind the other two libraries agents are written against:
+
+```js
+import { PrismProvider } from '@zeam-labs/x402-mcp-bridge/ethers'   // ethers v6
+const provider = new PrismProvider({ key: process.env.X402_PRIVATE_KEY })
+```
+
+```python
+from zeam_prism import PrismProvider                                  # web3.py, pip install zeam-prism
+w3 = Web3(PrismProvider(key=os.environ["X402_PRIVATE_KEY"]))
+```
+
+Same options, same `state()`, `close()` and `refund()`, same channel state
+directory, so the three share one channel per key. ethers batches requests and
+the door answers a batch item by item. The Python package lives in `python/`
+and is built on the official `x402` Python SDK. `test/ethers.mjs` and
+`python/test/live.py` prove each against a live server.
+
 ## Holding a line
 
 A server may sell **time** rather than calls, with a cheaper path than paying
