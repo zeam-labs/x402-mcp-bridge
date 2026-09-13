@@ -2,6 +2,13 @@
 
 A web3.py provider that pays [ZEAM Prism](https://mcp.zeamprism.com/llms.txt) from a wallet.
 
+```
+pip install 'git+https://github.com/zeam-labs/x402-mcp-bridge@<commit>#subdirectory=python'
+```
+
+Not on PyPI, on purpose: this code holds your key, so it installs from a commit
+you can read and that cannot be changed under you.
+
 ```python
 from web3 import Web3
 from zeam_prism import PrismProvider
