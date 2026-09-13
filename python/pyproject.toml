@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zeam-prism"
+version = "0.1.0"
+description = "A web3.py provider that pays ZEAM Prism from a wallet: the RPC URL becomes a key."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = ["x402==2.22.0", "web3>=7", "websockets>=12", "eth-account>=0.13", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://mcp.zeamprism.com/llms.txt"
+Repository = "https://github.com/zeam-labs/x402-mcp-bridge"
+
+[tool.setuptools]
+packages = ["zeam_prism"]
