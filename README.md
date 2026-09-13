@@ -98,6 +98,46 @@ A refused payment re-reads the terms and retries once, because quotes for
 non-stable assets move with the oracle. Anything still failing falls back to the
 old probe-then-pay path rather than dropping your call.
 
+## Point a chain client at it
+
+An agent that already has a viem client does not want an MCP tool called `rpc`.
+It wants its provider URL to be a wallet instead of an API key:
+
+```js
+import { createPublicClient } from 'viem'
+import { base } from 'viem/chains'
+import { prism } from '@zeam-labs/x402-mcp-bridge/viem'
+
+const client = createPublicClient({ chain: base, transport: prism({ key: process.env.X402_PRIVATE_KEY }) })
+await client.getBlockNumber()      // paid from the wallet, served by an archive node
+```
+
+Nothing else in the agent changes. The transport speaks JSON-RPC to Prism's
+`/rpc/base` (or `/rpc/eth` with `chain: 'eth'`) and x402 back. The first request
+funds a channel and buys one block. After that it holds a line: the meter is on
+while calls are flowing, off within a second of them stopping, and the line is
+let go after ten idle seconds. Vouchers cost no gas; only the deposit does.
+
+Options, all optional: `url` (the Prism host), `chain` (`base` | `eth`),
+`network`, `stateDir`, `depositMultiplier`, `asset`, `salt`, `rpcUrl` (a node
+of your own for the payment client's chain reads), `aheadMs` (bought time to
+keep on the meter while calling, default 2000), `idleMs` (meter off after this
+long with no call, default 1000), `dropAfterMs` (let the line go, default
+10000), `log`. Anything else is passed to viem's `http()`. The same `X402_*`
+environment variables the bridge reads are the defaults, and the channel state
+directory is shared, so a channel the bridge funded is the one the transport
+uses.
+
+The transport carries three extra methods: `state()` reports the address,
+channel, whether a line is held, whether the meter is on and the milliseconds
+left; `close()` switches the meter off and drops the line; `refund()` returns the
+unspent collateral and the time bought and not burned to the wallet. Call
+`close()` or `refund()` before your process exits, or the open socket keeps it
+alive.
+
+`test/viem.mjs` drives it against a live server with real money and checks each
+of those claims.
+
 ## Holding a line
 
 A server may sell **time** rather than calls, with a cheaper path than paying
