@@ -146,14 +146,16 @@ const provider = new PrismProvider({ key: process.env.X402_PRIVATE_KEY })
 ```
 
 ```python
-from zeam_prism import PrismProvider                                  # web3.py, pip install zeam-prism
+from zeam_prism import PrismProvider                                  # web3.py, see python/README.md
 w3 = Web3(PrismProvider(key=os.environ["X402_PRIVATE_KEY"]))
 ```
 
 Same options, same `state()`, `close()` and `refund()`, same channel state
 directory, so the three share one channel per key. ethers batches requests and
-the door answers a batch item by item. The Python package lives in `python/`
-and is built on the official `x402` Python SDK. `test/ethers.mjs` and
+the door answers a batch item by item. The Python package lives in `python/`, is
+built on the official `x402` Python SDK, and installs from this repository at a
+commit, which cannot be altered: `pip install 'git+https://github.com/zeam-labs/x402-mcp-bridge@<commit>#subdirectory=python'`.
+It is not on PyPI. `test/ethers.mjs` and
 `python/test/live.py` prove each against a live server.
 
 ## Holding a line
