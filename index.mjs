@@ -11,8 +11,8 @@ import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
 import * as chains from 'viem/chains'
-import { mkdirSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs'
+import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 
@@ -55,17 +55,19 @@ if (has('--help') || has('-h')) {
   process.exit(0)
 }
 
-if (!KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)) {
+const KEYLESS = !KEY || !/^0x[0-9a-fA-F]{64}$/.test(KEY)
+if (KEYLESS && (has('--call') || has('--refund'))) {
   log('set X402_PRIVATE_KEY to a 0x-prefixed 32-byte key. It stays on this machine;')
   log('it signs payment vouchers locally and is never sent anywhere.')
   process.exit(1)
 }
-const account = privateKeyToAccount(KEY)
+if (KEYLESS) log('no key: serving the catalog and the free tools; a paid call returns the quote, which says what a key needs')
+const account = KEYLESS ? null : privateKeyToAccount(KEY)
 const chainId = Number(String(NETWORK).split(':')[1])
 const chain = Object.values(chains).find((c) => c?.id === chainId)
 if (!chain) { log(`unknown network ${NETWORK}`); process.exit(1) }
 
-const stateDir = process.env.X402_STATE_DIR ??
+const stateDir = KEYLESS ? mkdtempSync(join(tmpdir(), 'x402-keyless-')) : process.env.X402_STATE_DIR ??
   join(homedir(), '.x402-mcp-bridge', new URL(UPSTREAM).host, account.address.toLowerCase())
 mkdirSync(stateDir, { recursive: true })
 
@@ -155,22 +157,25 @@ const cardSigner = CARD_PAYER ? {
   },
 } : null
 
-if (CARD_PAYER) {
+if (CARD_PAYER && account) {
   log(`spending ${CARD_PAYER}'s channel, authorized as ${account.address}`)
   log('this key can spend that channel and return it; it cannot move the money elsewhere')
 }
 
-const payments = paymentsFor({ signer: cardSigner ?? account, pub, network: NETWORK, selector, batch: {
+const payments = KEYLESS ? null : paymentsFor({ signer: cardSigner ?? account, pub, network: NETWORK, selector, batch: {
     depositPolicy,
     storage: watchedStorage,
     ...(CARD_PAYER ? { payerAuthorizer: account.address, voucherSigner: toClientEvmSigner(account, pub) } : {}),
     ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
   } })
 
-const upstream = wrapMCPClientWithPayment(
-  new Client({ name: NAME, version: VERSION }), payments, { autoPayment: true })
+const plain = new Client({ name: NAME, version: VERSION })
+const upstream = KEYLESS
+  ? { connect: (t) => plain.connect(t), listTools: () => plain.listTools(),
+      callTool: (name, args) => plain.callTool({ name, arguments: args ?? {} }) }
+  : wrapMCPClientWithPayment(plain, payments, { autoPayment: true })
 await upstream.connect(new StreamableHTTPClientTransport(new URL(UPSTREAM)))
-log(`paying as ${account.address} -> ${UPSTREAM}`)
+log(KEYLESS ? `catalog from ${UPSTREAM}, paying nothing` : `paying as ${account.address} -> ${UPSTREAM}`)
 
 const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
 let accepts = null
@@ -222,6 +227,7 @@ let coldStart = !channelId
 if (coldStart) log('no local channel state — probing once to learn where this channel stands')
 
 const payNow = async (name, args) => {
+  if (KEYLESS) return upstream.callTool(name, args)
   if (coldStart) {
     coldStart = false
     return upstream.callTool(name, args)
@@ -269,7 +275,7 @@ function refusedPayment(out) {
   const body = String(out?.content?.[0]?.text ?? '')
   return /x402Version/.test(body) && /"error"\s*:\s*"(invalid_|insufficient_|cumulative_)/.test(body)
 }
-log(`channel state in ${stateDir}`)
+if (!KEYLESS) log(`channel state in ${stateDir}`)
 
 const LINE_MODE = (process.env.X402_LINE ?? 'auto').toLowerCase()
 
