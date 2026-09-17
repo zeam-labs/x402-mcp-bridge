@@ -23,11 +23,12 @@ arguments this is still an MCP stdio server, which is what an MCP client wants.
 
 ## The line, and when this client drops it
 
-The server holds an idle line for **5000ms** and bills for that time. This client
-drops its own after **four tick intervals (1000ms)** of no use, so a pause costs
-you a reopen rather than four seconds of billing. So `closesAfterIdleMs: 5000` in
-`services.json` is the server's ceiling, not this client's behavior — expect a
-line to reopen during a slow session. `X402_LINE=off` pays per call instead.
+While a line's meter is on, the server bills wall-clock time whether or not you
+call anything — that is what a line is, and there is no server-side idle timeout.
+This client does not touch the meter's switch; it drops its line after **four
+tick intervals (1000ms)** of no use, so a pause costs you a reopen rather than
+open-ended idle billing. Expect a line to reopen during a slow session.
+`X402_LINE=off` pays per call instead.
 
 ## Why you need it
 
