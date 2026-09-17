@@ -4,10 +4,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { wrapMCPClientWithPayment, x402Client } from '@x402/mcp'
-import { BatchSettlementEvmScheme } from '@x402/evm/batch-settlement/client'
-import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
+import { wrapMCPClientWithPayment } from '@x402/mcp'
+import { paymentsFor, selectorFor } from './client.mjs'
 import { toClientEvmSigner } from '@x402/evm'
+import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
 import * as chains from 'viem/chains'
@@ -81,16 +81,7 @@ log(`chain reads: ${readers.map(u => new URL(u).host).join(' -> ')}` +
   (process.env.X402_RPC_URL ? '' : '  (set X402_RPC_URL to put your own node first)'))
 
 let chosenAccept = null
-const selector = (_version, accepts) => {
-  if (WANT) {
-    const hit = accepts.find((a) => String(a.asset).toLowerCase() === WANT ||
-      String(a.extra?.name ?? '').toLowerCase() === WANT)
-    if (hit) { chosenAccept = hit; return hit }
-    log(`X402_ASSET=${WANT} is not among the ${accepts.length} quoted; falling back to the first`)
-  }
-  chosenAccept = accepts[0]
-  return accepts[0]
-}
+const selector = selectorFor(WANT, (a) => { chosenAccept = a }, log)
 
 const storage = new FileClientChannelStorage({ directory: stateDir })
 let channelId = null
@@ -171,13 +162,12 @@ if (CARD_PAYER && account) {
   log('this key can spend that channel and return it; it cannot move the money elsewhere')
 }
 
-const payments = KEYLESS ? null : new x402Client(selector).register(NETWORK,
-  new BatchSettlementEvmScheme(toClientEvmSigner(cardSigner ?? account, pub), {
+const payments = KEYLESS ? null : paymentsFor({ signer: cardSigner ?? account, pub, network: NETWORK, selector, batch: {
     depositPolicy,
     storage: watchedStorage,
     ...(CARD_PAYER ? { payerAuthorizer: account.address, voucherSigner: toClientEvmSigner(account, pub) } : {}),
     ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
-  }))
+  } })
 
 const plain = new Client({ name: NAME, version: VERSION })
 const upstream = KEYLESS
