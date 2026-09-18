@@ -42,7 +42,7 @@ if (has('--help') || has('-h')) {
     '',
     'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
     '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (refundable collateral to lock, as a multiple of',
+    '     X402_DEPOSIT_MULTIPLIER (default 40; refundable collateral to lock, as a multiple of',
     '     the opening quote; unset uses the x402 scheme default, minimum 3),',
     '     X402_LINE=auto|on|off,',
     '     X402_SALT.',
@@ -95,9 +95,7 @@ try {
   if (f) channelId = f.replace(/\.json$/, '')
 } catch {}
 
-const depositPolicy = process.env.X402_DEPOSIT_MULTIPLIER
-  ? { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER) }
-  : {}
+const depositPolicy = { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40) }
 
 const MAX_SPEND = Number(process.env.X402_MAX_SPEND ?? 10_000_000)
 let capReached = false
@@ -282,7 +280,7 @@ const explainPermit2 = (out) => {
   if (!token || approvalToldFor === token) return true
   approvalToldFor = token
   const per = Number(chosenAccept?.amount ?? 0)
-  const mult = Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 5)
+  const mult = Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40)
   const suggested = per > 0 ? BigInt(Math.ceil(per * mult * 4)) : 0n
   log(`${token} moves through Permit2 and your wallet has not approved it.`)
   log(`  send once, from your wallet:  approve(${PERMIT2}, ${suggested || '<amount>'})  on ${token}`)
