@@ -226,18 +226,37 @@ const payFirst = (name, args) => oneAtATime(() => { declarePaying(); return payN
 let coldStart = !channelId
 if (coldStart) log('no local channel state — probing once to learn where this channel stands')
 
+const OPEN_FEE_REQUIRED = /"code"\s*:\s*"funding_requires_open_fee"/
+const openFeeRequired = (out) => OPEN_FEE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
+
+const needsTopUp = async () => {
+  if (!channelId || !tickAccepts?.accepts?.length) return false
+  try {
+    const c = await storage.get(channelId)
+    if (!c?.balance || c.chargedCumulativeAmount === undefined) return false
+    const asset = String(chosenAccept?.asset ?? '').toLowerCase()
+    const row = tickAccepts.accepts.find(r => String(r.asset ?? '').toLowerCase() === asset) ?? tickAccepts.accepts[0]
+    return BigInt(c.balance) - BigInt(c.chargedCumulativeAmount) < BigInt(row.amount ?? 0)
+  } catch { return false }
+}
+
 const payNow = async (name, args) => {
   if (KEYLESS) return upstream.callTool(name, args)
   if (coldStart) {
     coldStart = false
     return upstream.callTool(name, args)
   }
-  const terms = name === 'tick' ? tickAccepts : accepts
+  let terms = name === 'tick' && !(await needsTopUp()) ? tickAccepts : accepts
   if (!terms) return upstream.callTool(name, args)
   for (const attempt of [1, 2]) {
     try {
       const payload = await payments.createPaymentPayload(terms)
       const out = await upstream.callToolWithPayment(name, args, payload)
+      if (name === 'tick' && terms === tickAccepts && openFeeRequired(out)) {
+        log('the server wants this deposit on the funding row: a top-up is charged one block plus its gas, like the first')
+        terms = accepts
+        continue
+      }
       if (explainPermit2(out)) return out
       if (refusedPayment(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
