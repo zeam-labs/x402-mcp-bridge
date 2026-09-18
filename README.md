@@ -28,7 +28,7 @@ call anything — that is what a line is, and there is no server-side idle timeo
 This client does not touch the meter's switch; it drops its line after **four
 tick intervals (1000ms)** of no use, so a pause costs you a reopen rather than
 open-ended idle billing. Expect a line to reopen during a slow session.
-`X402_LINE=off` pays per call instead.
+`X402_LINE=off` pays per call where the seller takes it. Prism serves a funded channel on a line, so there the bridge rides one for the call and lets it go.
 
 ## Why you need it
 
@@ -219,7 +219,7 @@ time and an overlapping tick is refused as `channel_busy`.
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | *scheme default* | how much **refundable** collateral to lock, as a multiple of the seller's quote for the opening call. Unset, the x402 scheme sizes it (minimum 3); raise it to top up less often, lower it to commit less. It leaves your wallet when you open the channel and comes back on refund — it is not the price. |
+| `X402_DEPOSIT_MULTIPLIER` | *scheme default* | how much **refundable** collateral to lock, as a multiple of the seller's quote for the opening call. Unset, the x402 scheme sizes it (minimum 3); raise it to top up less often, lower it to commit less. It leaves your wallet when you open the channel and comes back on refund — it is not the price. | A top-up is a deposit on the same funding quote, charged one block plus its gas like the first; the bridge makes one when the collateral behind a tick is below one block.
 
 ## It stops spending when you stop watching
 
