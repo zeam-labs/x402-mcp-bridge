@@ -1,10 +1,3 @@
-// The wallet behind a chain client: everything a provider needs to pay ZEAM
-// Prism from a key. viem.mjs and ethers.mjs are thin shapes over this.
-//
-// The first request funds a channel and buys one block; after that it holds a
-// line, keeps time on the meter while calls are flowing, switches the meter off
-// when they stop, and lets the line go when nothing has called for a while.
-
 import { createPublicClient, http as plainHttp, fallback, keccak256, toHex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import * as chains from 'viem/chains'
@@ -142,7 +135,6 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
     s.offTimer = setTimeout(() => { off().catch(() => {}) }, idleMs); s.offTimer.unref?.()
     s.dropTimer = setTimeout(() => drop('idle'), dropAfterMs); s.dropTimer.unref?.()
   }
-  // One block at a time, in order: a voucher signs a cumulative total.
   const tickOnce = () => w.oneAtATime(async () => {
     if (!s.credential) return false
     const t = await terms()
@@ -162,7 +154,6 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
     read(j.msRemaining, s.metering)
     return true
   })
-  // Enough for the next call now; the rest in the background.
   const ensure = async (minMs) => { while (s.credential && remaining() < minMs) { if (!(await tickOnce())) return false } ; return Boolean(s.credential) }
   const topUp = () => {
     if (s.topping) return s.topping
@@ -224,8 +215,6 @@ export function client(opts = {}) {
         if (LINE_GONE.has(code)) { l.drop(code); continue }
         return r
       }
-      // No line yet: this call pays for its block, and funds the channel if
-      // there is none. One payment at a time on a channel.
       const r = await w.oneAtATime(() => w.paidFetch(req.clone()))
       if (r.status !== 402) return r
       const code = await codeOf(r)
@@ -235,8 +224,6 @@ export function client(opts = {}) {
     throw new Error('prism: could not hold a line after three attempts')
   }
 
-  // Stop buying, let the payment in flight settle, then ask. A refund while a
-  // voucher is still being verified is refused as a request still open.
   const refund = async () => {
     l.drop('refunding')
     await w.oneAtATime(() => {})

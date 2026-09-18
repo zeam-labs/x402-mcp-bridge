@@ -1,6 +1,3 @@
-// Drive the ethers provider against a live Prism. Spends real money from the key.
-//
-//   PRISM_TEST_URL=https://mcp.zeamprism.com X402_PRIVATE_KEY=0x... node test/ethers.mjs
 import { Contract, id } from 'ethers'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'

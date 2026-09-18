@@ -1,8 +1,3 @@
-// A viem transport that pays ZEAM Prism from a wallet.
-//
-//   import { prism } from '@zeam-labs/x402-mcp-bridge/viem'
-//   const client = createPublicClient({ chain: base, transport: prism({ key }) })
-
 import { http } from 'viem'
 import { client, LINE_HEADER } from './pay.mjs'
 

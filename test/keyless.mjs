@@ -1,8 +1,3 @@
-//   PRISM_TEST_URL=https://mcp.zeamprism.com node test/keyless.mjs
-//
-// A stock MCP client adds this bridge before it has a wallet. It must see the
-// catalog and be able to call the free tools; a paid call must come back as the
-// server's quote, not as silence. Glama's sandbox is such a client.
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'

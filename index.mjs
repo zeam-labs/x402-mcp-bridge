@@ -42,7 +42,7 @@ if (has('--help') || has('-h')) {
     '',
     'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
     '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (refundable collateral to lock, as a multiple of',
+    '     X402_DEPOSIT_MULTIPLIER (default 40; refundable collateral to lock, as a multiple of',
     '     the opening quote; unset uses the x402 scheme default, minimum 3),',
     '     X402_LINE=auto|on|off,',
     '     X402_SALT.',
@@ -95,9 +95,7 @@ try {
   if (f) channelId = f.replace(/\.json$/, '')
 } catch {}
 
-const depositPolicy = process.env.X402_DEPOSIT_MULTIPLIER
-  ? { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER) }
-  : {}
+const depositPolicy = { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40) }
 
 const MAX_SPEND = Number(process.env.X402_MAX_SPEND ?? 10_000_000)
 let capReached = false
@@ -226,18 +224,39 @@ const payFirst = (name, args) => oneAtATime(() => { declarePaying(); return payN
 let coldStart = !channelId
 if (coldStart) log('no local channel state — probing once to learn where this channel stands')
 
+const OPEN_FEE_REQUIRED = /"code"\s*:\s*"funding_requires_open_fee"/
+const openFeeRequired = (out) => OPEN_FEE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
+
+const needsTopUp = async () => {
+  if (!channelId || !tickAccepts?.accepts?.length) return false
+  try {
+    const c = await storage.get(channelId)
+    if (!c?.balance || c.chargedCumulativeAmount === undefined) return false
+    const asset = String(chosenAccept?.asset ?? '').toLowerCase()
+    const row = tickAccepts.accepts.find(r => String(r.asset ?? '').toLowerCase() === asset) ?? tickAccepts.accepts[0]
+    return BigInt(c.balance) - BigInt(c.chargedCumulativeAmount) < BigInt(row.amount ?? 0)
+  } catch { return false }
+}
+
 const payNow = async (name, args) => {
   if (KEYLESS) return upstream.callTool(name, args)
   if (coldStart) {
     coldStart = false
     return upstream.callTool(name, args)
   }
-  const terms = name === 'tick' ? tickAccepts : accepts
+  const topUp = name === 'tick' && await needsTopUp()
+  if (topUp) log('collateral is below one block: this tick carries a deposit on the funding row, charged one block plus its gas like the first')
+  let terms = name === 'tick' && !topUp ? tickAccepts : accepts
   if (!terms) return upstream.callTool(name, args)
   for (const attempt of [1, 2]) {
     try {
       const payload = await payments.createPaymentPayload(terms)
       const out = await upstream.callToolWithPayment(name, args, payload)
+      if (name === 'tick' && terms === tickAccepts && openFeeRequired(out)) {
+        log('the server wants this deposit on the funding row: a top-up is charged one block plus its gas, like the first')
+        terms = accepts
+        continue
+      }
       if (explainPermit2(out)) return out
       if (refusedPayment(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
@@ -261,7 +280,7 @@ const explainPermit2 = (out) => {
   if (!token || approvalToldFor === token) return true
   approvalToldFor = token
   const per = Number(chosenAccept?.amount ?? 0)
-  const mult = Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 5)
+  const mult = Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40)
   const suggested = per > 0 ? BigInt(Math.ceil(per * mult * 4)) : 0n
   log(`${token} moves through Permit2 and your wallet has not approved it.`)
   log(`  send once, from your wallet:  approve(${PERMIT2}, ${suggested || '<amount>'})  on ${token}`)
@@ -283,7 +302,7 @@ const AUTO_FAST_RUN = Number(process.env.X402_AUTO_FAST_RUN ?? 2)
 
 const AUTO_SLOW_RUN = Number(process.env.X402_AUTO_SLOW_RUN ?? 4)
 
-const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null }
+const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null, onAck: null }
 
 const rate = { lastCallAt: 0, fastRun: 0, slowRun: 0 }
 
@@ -329,6 +348,25 @@ const tick = async () => {
   finally { ticking = false }
 }
 
+const turnOn = (why) => new Promise((resolve) => {
+  if (!line.socket) return resolve(false)
+  log(`${why}; turning it on`)
+  const settle = setTimeout(() => { line.onAck = null; resolve(false) }, 2_000)
+  line.onAck = (m) => { clearTimeout(settle); resolve(m?.msRemaining > 0) }
+  try { line.socket.send(JSON.stringify({ op: 'on' })) } catch { clearTimeout(settle); line.onAck = null; resolve(false) }
+})
+
+const METER_OFF = /"code"\s*:\s*"line_unpaid"/
+const meterOff = (out) => METER_OFF.test(String(out?.content?.[0]?.text ?? ''))
+
+const callOnce = async (name, args) => {
+  let out = await upstream.callTool(name, { ...args, line: line.credential })
+  if (!meterOff(out) || !line.credential) return out
+  await tick()
+  await turnOn('the line answered line_unpaid')
+  return upstream.callTool(name, { ...args, line: line.credential })
+}
+
 const openLine = () => {
   if (line.credential || line.opening) return line.opening
   if (!channelId) return null
@@ -360,13 +398,15 @@ const openLine = () => {
         line.lastUse = Date.now()
         log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
             `collateral buys ${m.buysMs ?? '?'}ms`)
-        const first = tick()
+        const first = tick().then(() => (m.metering === false ? turnOn('the meter on this channel is off (someone sent {op:"off"})') : null))
         line.timer = setInterval(() => {
           if (LINE_MODE === 'auto' && Date.now() - line.lastUse > line.tickMs * 4) return dropLine('idle')
           tick()
         }, line.tickMs)
         line.timer.unref?.()
         first.then(() => resolve(line.credential))
+      } else if (m.op === 'on') {
+        line.onAck?.(m); line.onAck = null
       } else if (m.op === 'closing' || m.error) {
         log(`line: ${m.why ?? m.error}`)
         clearTimeout(give_up)
@@ -399,21 +439,21 @@ const callOnLine = async (name, args) => {
     if (!line.credential && channelId) await openLine()
     return payFirst('tick', line.credential ? { line: line.credential } : args)
   }
-  if (LINE_MODE === 'off') return payFirst(name, args)
+  if (LINE_MODE === 'off') return payOrRide(name, args)
 
   if (LINE_MODE === 'auto') {
     if (!holdingIsCheaper()) {
       if (line.credential) dropLine('slower than the minimum hold — slices are cheaper')
-      return payFirst(name, args)
+      return payOrRide(name, args)
     }
   }
 
-  if (!channelId) return payFirst(name, args)
+  if (!channelId) return payOrRide(name, args)
 
   for (const attempt of [1, 2]) {
     if (!line.credential) await openLine()
     if (!line.credential) break
-    const out = await upstream.callTool(name, { ...args, line: line.credential })
+    const out = await callOnce(name, args)
     if (!lineWasRefused(out)) return out
     dropLine(reasonFrom(out) ?? 'refused by the server')
     if (attempt === 2) {
@@ -421,7 +461,19 @@ const callOnLine = async (name, args) => {
         'is collateral, raise X402_DEPOSIT_MULTIPLIER — the scheme minimum is 3.')
     }
   }
-  return payFirst(name, args)
+  return payOrRide(name, args)
+}
+
+const LINE_REQUIRED = /"(?:error|code)"\s*:\s*"line_required"/
+const lineRequired = (out) => LINE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
+
+const payOrRide = async (name, args) => {
+  const out = await payFirst(name, args)
+  if (!lineRequired(out) || !channelId) return out
+  log('the channel is funded: paid work rides a line from here — opening one for this call')
+  if (!line.credential) await openLine()
+  if (!line.credential) return out
+  return callOnce(name, args)
 }
 
 const LINE_IS_GONE = /"lineGone"\s*:\s*true|"(?:error|code)"\s*:\s*"(?:unknown_line|line_unpaid|line_closed)"/
@@ -509,6 +561,17 @@ if (has('--refund')) {
     socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
   })
 
+  if (answer.op === 'refunded' && answer.channelState?.chargedCumulativeAmount !== undefined) {
+    try {
+      const prior = (await storage.get(channelId)) ?? {}
+      const cs = answer.channelState
+      await storage.set(channelId, { ...prior, chargedCumulativeAmount: String(cs.chargedCumulativeAmount),
+        ...(cs.balance !== undefined ? { balance: String(cs.balance) } : {}),
+        ...(cs.totalClaimed !== undefined ? { totalClaimed: String(cs.totalClaimed) } : {}),
+        signedMaxClaimable: String(cs.chargedCumulativeAmount), signature: undefined })
+      log(`channel rebased to ${cs.chargedCumulativeAmount} charged after the refund`)
+    } catch (e) { log(`could not rebase the channel after the refund: ${e.message}`) }
+  }
   process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
   if (answer.op !== 'refunded') {
     process.stderr.write([

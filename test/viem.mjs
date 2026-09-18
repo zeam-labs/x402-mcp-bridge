@@ -1,6 +1,3 @@
-// Drive the viem transport against a live Prism. Spends real money from the key.
-//
-//   PRISM_TEST_URL=https://mcp.zeamprism.com X402_PRIVATE_KEY=0x... node test/viem.mjs
 import { createPublicClient, parseAbiItem } from 'viem'
 import { base } from 'viem/chains'
 import { mkdtempSync } from 'node:fs'

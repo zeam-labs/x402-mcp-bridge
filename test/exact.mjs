@@ -1,4 +1,3 @@
-//   node test/exact.mjs        offline: no network, no money
 import assert from 'node:assert/strict'
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, http } from 'viem'
