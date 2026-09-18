@@ -509,6 +509,21 @@ if (has('--refund')) {
     socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
   })
 
+  // A refund lowers what the seller has charged; the next voucher must start from
+  // there, not from the last one this client signed. Write the seller's post-refund
+  // state back, or the next deposit re-authorizes the refunded amount and the seller
+  // may claim it twice (audit 31).
+  if (answer.op === 'refunded' && answer.channelState?.chargedCumulativeAmount !== undefined) {
+    try {
+      const prior = (await storage.get(channelId)) ?? {}
+      const cs = answer.channelState
+      await storage.set(channelId, { ...prior, chargedCumulativeAmount: String(cs.chargedCumulativeAmount),
+        ...(cs.balance !== undefined ? { balance: String(cs.balance) } : {}),
+        ...(cs.totalClaimed !== undefined ? { totalClaimed: String(cs.totalClaimed) } : {}),
+        signedMaxClaimable: String(cs.chargedCumulativeAmount), signature: undefined })
+      log(`channel rebased to ${cs.chargedCumulativeAmount} charged after the refund`)
+    } catch (e) { log(`could not rebase the channel after the refund: ${e.message}`) }
+  }
   process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
   if (answer.op !== 'refunded') {
     process.stderr.write([
