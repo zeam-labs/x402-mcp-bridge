@@ -230,7 +230,7 @@ export function client(opts = {}) {
     let r
     for (let i = 0; i < 6; i++) {
       r = await l.refund()
-      if (r.op === 'refunded' || !/still open/.test(String(r.why ?? ''))) return r
+      if (r.op === 'refunded' || (r.code ? r.code !== 'request_open' : !/still open/.test(String(r.why ?? '')))) return r
       await new Promise((res) => setTimeout(res, 1000))
     }
     return r
