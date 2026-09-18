@@ -283,7 +283,7 @@ const AUTO_FAST_RUN = Number(process.env.X402_AUTO_FAST_RUN ?? 2)
 
 const AUTO_SLOW_RUN = Number(process.env.X402_AUTO_SLOW_RUN ?? 4)
 
-const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null }
+const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null, onAck: null }
 
 const rate = { lastCallAt: 0, fastRun: 0, slowRun: 0 }
 
@@ -329,6 +329,30 @@ const tick = async () => {
   finally { ticking = false }
 }
 
+// The meter is the buyer's switch: a payment never moves it, and an off left
+// by another line on the same channel stays. Time is bought first, then the
+// switch, so nothing is charged for a span the line has not been served in.
+const turnOn = (why) => new Promise((resolve) => {
+  if (!line.socket) return resolve(false)
+  log(`${why}; turning it on`)
+  const settle = setTimeout(() => { line.onAck = null; resolve(false) }, 2_000)
+  line.onAck = (m) => { clearTimeout(settle); resolve(m?.msRemaining > 0) }
+  try { line.socket.send(JSON.stringify({ op: 'on' })) } catch { clearTimeout(settle); line.onAck = null; resolve(false) }
+})
+
+const METER_OFF = /"code"\s*:\s*"line_unpaid"/
+const meterOff = (out) => METER_OFF.test(String(out?.content?.[0]?.text ?? ''))
+
+// One call on the line; if the answer is an off or empty meter, buy a block,
+// switch on, and try once more.
+const callOnce = async (name, args) => {
+  let out = await upstream.callTool(name, { ...args, line: line.credential })
+  if (!meterOff(out) || !line.credential) return out
+  await tick()
+  await turnOn('the line answered line_unpaid')
+  return upstream.callTool(name, { ...args, line: line.credential })
+}
+
 const openLine = () => {
   if (line.credential || line.opening) return line.opening
   if (!channelId) return null
@@ -360,17 +384,15 @@ const openLine = () => {
         line.lastUse = Date.now()
         log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
             `collateral buys ${m.buysMs ?? '?'}ms`)
-        if (m.metering === false) {
-          log('the meter on this channel is off (someone sent {op:"off"}); turning it on — a line with the meter off is closed on its first paid call')
-          socket.send(JSON.stringify({ op: 'on' }))
-        }
-        const first = tick()
+        const first = tick().then(() => (m.metering === false ? turnOn('the meter on this channel is off (someone sent {op:"off"})') : null))
         line.timer = setInterval(() => {
           if (LINE_MODE === 'auto' && Date.now() - line.lastUse > line.tickMs * 4) return dropLine('idle')
           tick()
         }, line.tickMs)
         line.timer.unref?.()
         first.then(() => resolve(line.credential))
+      } else if (m.op === 'on') {
+        line.onAck?.(m); line.onAck = null
       } else if (m.op === 'closing' || m.error) {
         log(`line: ${m.why ?? m.error}`)
         clearTimeout(give_up)
@@ -417,7 +439,7 @@ const callOnLine = async (name, args) => {
   for (const attempt of [1, 2]) {
     if (!line.credential) await openLine()
     if (!line.credential) break
-    const out = await upstream.callTool(name, { ...args, line: line.credential })
+    const out = await callOnce(name, args)
     if (!lineWasRefused(out)) return out
     dropLine(reasonFrom(out) ?? 'refused by the server')
     if (attempt === 2) {
@@ -440,7 +462,7 @@ const payOrRide = async (name, args) => {
   log('the channel is funded: paid work rides a line from here — opening one for this call')
   if (!line.credential) await openLine()
   if (!line.credential) return out
-  return upstream.callTool(name, { ...args, line: line.credential })
+  return callOnce(name, args)
 }
 
 const LINE_IS_GONE = /"lineGone"\s*:\s*true|"(?:error|code)"\s*:\s*"(?:unknown_line|line_unpaid|line_closed)"/
