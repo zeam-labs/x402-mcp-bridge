@@ -181,12 +181,12 @@ and whether unused time is kept are the server's to state, not this bridge's.
 
 | value | |
 |---|---|
-| `auto` *(default)* | open a line on your first call, hold it while calls keep coming, let it lapse when they stop. A line is cheaper than per-call pricing exactly while work is flowing and more expensive while it is not, so this follows the work. |
+| `auto` *(default)* | pay per call until calls come fast, then hold a line while they keep coming and let it lapse when they stop. Where the seller serves a funded channel only on a line (Prism does), a `line_required` answer makes the bridge ride a line for that call, so the first call of a session is served either way. |
 | `on` | hold a line from startup and keep paying whether or not anyone calls. |
 | `off` | per-call payment only. Works against any x402 endpoint. |
 
 If the server refuses a call because the line is gone — an ordinary rotate or
-idle close — the bridge **reopens the line and retries**, and only pays per call
+idle close — the bridge **reopens the line and retries**; a `line_required` answer is answered by riding a line for the call, and only pays per call
 if that fails too. That ordering matters: falling straight through to per-call
 payment turns one closed line into a signed payment per in-flight call,
 serialized behind one channel, and when those run out of road they become unpaid
@@ -219,7 +219,7 @@ time and an overlapping tick is refused as `channel_busy`.
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | *scheme default* | how much **refundable** collateral to lock, as a multiple of the seller's quote for the opening call. Unset, the x402 scheme sizes it (minimum 3); raise it to top up less often, lower it to commit less. It leaves your wallet when you open the channel and comes back on refund — it is not the price. | A top-up is a deposit on the same funding quote, charged one block plus its gas like the first; the bridge makes one when the collateral behind a tick is below one block.
+| `X402_DEPOSIT_MULTIPLIER` | `40` | how much **refundable** collateral to lock, as a multiple of the seller's quote, on the first deposit and on every top-up. Every deposit is charged the seller's open fee (the gas of that deposit), so the multiplier sets the gas share of your bill: at Prism's quotes today, 5x buys ~7 s of metered time per ~1.5 k micro-USD of gas (~22% on top of the rate), 40x ~1.2 min per deposit (~2.5%). The x402 scheme's minimum is 3. A top-up is a deposit on the same funding quote, made when the collateral behind a tick is below one block. |
 
 ## It stops spending when you stop watching
 
