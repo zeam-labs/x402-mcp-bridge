@@ -14,7 +14,7 @@ A headless agent does not run a desktop MCP client. It runs a shell. So:
 With your key already exported into the environment as `X402_PRIVATE_KEY`:
 
     npx -y @zeam-labs/x402-mcp-bridge \
-      --call rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
+      --call call_rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
 
     npx -y @zeam-labs/x402-mcp-bridge --tools
 
@@ -101,7 +101,7 @@ old probe-then-pay path rather than dropping your call.
 
 ## Point a chain client at it
 
-An agent that already has a viem client does not want an MCP tool called `rpc`.
+An agent that already has a viem client does not want an MCP tool called `call_rpc`.
 It wants its provider URL to be a wallet instead of an API key:
 
 ```js
@@ -169,7 +169,7 @@ bridge drives it for you:
 2. Open a line on the endpoint's `/pay` websocket. If the server challenges,
    the bridge signs the challenge with your key to prove the channel is yours,
    and gets back a credential.
-3. Call the `tick` tool on a steady cadence, passing `{line: "<credential>"}`.
+3. Call the `buy_time` tool on a steady cadence, passing `{line: "<credential>"}`.
    That is an ordinary paid call and it pays the server for more time.
 4. Every other call carries only `{line: "<credential>"}` and no payment, and as
    many can be in flight at once as you like.
@@ -210,7 +210,7 @@ time and an overlapping tick is refused as `channel_busy`.
 
 | variable | default | |
 |---|---|---|
-| `X402_PRIVATE_KEY` | — | **required.** Funds the channel and signs vouchers. |
+| `X402_PRIVATE_KEY` | — | Funds the channel and signs vouchers. Without it the bridge still serves the catalog and the free tools; a paid call returns the seller's quote. |
 | `X402_MCP_URL` | `https://mcp.zeamprism.com/mcp` | any x402-paid MCP endpoint |
 | `X402_NETWORK` | `eip155:8453` | CAIP-2 |
 | `X402_LINE` | `auto` | `auto`, `on` or `off` — see **Holding a line** above |
