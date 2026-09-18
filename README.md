@@ -1,5 +1,7 @@
 # x402-mcp-bridge
 
+[![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
+
 `@zeam-labs/x402-mcp-bridge` on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
 
 Published from this source at the tagged version. npm's integrity hash is of that
