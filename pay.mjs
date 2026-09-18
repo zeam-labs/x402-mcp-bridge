@@ -139,15 +139,25 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
     if (!s.credential) return false
     const t = await terms()
     let r
-    if (t) {
-      const payload = await w.payments.createPaymentPayload(t)
+    const post = async (terms) => {
+      const payload = await w.payments.createPaymentPayload(terms)
       const headers = { ...w.httpClient.encodePaymentSignatureHeader(payload), [LINE_HEADER]: s.credential, 'content-type': 'application/json' }
-      r = await fetch(new URL('/v1/tick', url), { method: 'POST', headers, body: '{}' })
-      await w.httpClient.processPaymentResult(payload, (n) => r.headers.get(n), r.status).catch(() => {})
-      if (r.status === 402) { s.tickTerms = null; r = null }
+      const res = await fetch(new URL('/v1/buy_time', url), { method: 'POST', headers, body: '{}' })
+      await w.httpClient.processPaymentResult(payload, (n) => res.headers.get(n), res.status).catch(() => {})
+      return res
+    }
+    if (t) {
+      r = await post(t)
+      if (r.status === 402) {
+        const body = await r.clone().json().catch(() => null)
+        if (body?.code === 'funding_requires_open_fee' && Array.isArray(body.accepts) && body.accepts.length) {
+          log('prism: collateral is below one block; this tick carries a deposit on the funding row')
+          r = await post({ x402Version: t.x402Version ?? 2, accepts: body.accepts })
+        } else { s.tickTerms = null; r = null }
+      }
     }
     if (!r) {
-      r = await w.paidFetch(new URL('/v1/tick', url), { method: 'POST', headers: { [LINE_HEADER]: s.credential, 'content-type': 'application/json' }, body: '{}' })
+      r = await w.paidFetch(new URL('/v1/buy_time', url), { method: 'POST', headers: { [LINE_HEADER]: s.credential, 'content-type': 'application/json' }, body: '{}' })
     }
     const j = await r.json().catch(() => null)
     if (r.status !== 200 || j?.paid === false) { drop(`tick refused: ${j?.error ?? j?.why ?? r.status}`); return false }
