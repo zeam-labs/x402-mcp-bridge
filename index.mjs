@@ -360,6 +360,10 @@ const openLine = () => {
         line.lastUse = Date.now()
         log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
             `collateral buys ${m.buysMs ?? '?'}ms`)
+        if (m.metering === false) {
+          log('the meter on this channel is off (someone sent {op:"off"}); turning it on — a line with the meter off is closed on its first paid call')
+          socket.send(JSON.stringify({ op: 'on' }))
+        }
         const first = tick()
         line.timer = setInterval(() => {
           if (LINE_MODE === 'auto' && Date.now() - line.lastUse > line.tickMs * 4) return dropLine('idle')
@@ -399,16 +403,16 @@ const callOnLine = async (name, args) => {
     if (!line.credential && channelId) await openLine()
     return payFirst('tick', line.credential ? { line: line.credential } : args)
   }
-  if (LINE_MODE === 'off') return payFirst(name, args)
+  if (LINE_MODE === 'off') return payOrRide(name, args)
 
   if (LINE_MODE === 'auto') {
     if (!holdingIsCheaper()) {
       if (line.credential) dropLine('slower than the minimum hold — slices are cheaper')
-      return payFirst(name, args)
+      return payOrRide(name, args)
     }
   }
 
-  if (!channelId) return payFirst(name, args)
+  if (!channelId) return payOrRide(name, args)
 
   for (const attempt of [1, 2]) {
     if (!line.credential) await openLine()
@@ -421,7 +425,22 @@ const callOnLine = async (name, args) => {
         'is collateral, raise X402_DEPOSIT_MULTIPLIER — the scheme minimum is 3.')
     }
   }
-  return payFirst(name, args)
+  return payOrRide(name, args)
+}
+
+const LINE_REQUIRED = /"(?:error|code)"\s*:\s*"line_required"/
+const lineRequired = (out) => LINE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
+
+// A per-call payment on a funded channel is refused, unspent: the server serves
+// paid work on a line once the channel holds collateral. When it says so, ride
+// a line for this call rather than hand the refusal to the caller.
+const payOrRide = async (name, args) => {
+  const out = await payFirst(name, args)
+  if (!lineRequired(out) || !channelId) return out
+  log('the channel is funded: paid work rides a line from here — opening one for this call')
+  if (!line.credential) await openLine()
+  if (!line.credential) return out
+  return upstream.callTool(name, { ...args, line: line.credential })
 }
 
 const LINE_IS_GONE = /"lineGone"\s*:\s*true|"(?:error|code)"\s*:\s*"(?:unknown_line|line_unpaid|line_closed)"/
