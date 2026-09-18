@@ -1,10 +1,3 @@
-// An ethers provider that pays ZEAM Prism from a wallet.
-//
-//   import { PrismProvider } from '@zeam-labs/x402-mcp-bridge/ethers'
-//   const provider = new PrismProvider({ key })
-//
-// ethers sends JSON-RPC in batches; the door answers a batch item by item.
-
 import { JsonRpcProvider } from 'ethers'
 import { client, LINE_HEADER } from './pay.mjs'
 
