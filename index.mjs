@@ -329,9 +329,6 @@ const tick = async () => {
   finally { ticking = false }
 }
 
-// The meter is the buyer's switch: a payment never moves it, and an off left
-// by another line on the same channel stays. Time is bought first, then the
-// switch, so nothing is charged for a span the line has not been served in.
 const turnOn = (why) => new Promise((resolve) => {
   if (!line.socket) return resolve(false)
   log(`${why}; turning it on`)
@@ -343,8 +340,6 @@ const turnOn = (why) => new Promise((resolve) => {
 const METER_OFF = /"code"\s*:\s*"line_unpaid"/
 const meterOff = (out) => METER_OFF.test(String(out?.content?.[0]?.text ?? ''))
 
-// One call on the line; if the answer is an off or empty meter, buy a block,
-// switch on, and try once more.
 const callOnce = async (name, args) => {
   let out = await upstream.callTool(name, { ...args, line: line.credential })
   if (!meterOff(out) || !line.credential) return out
@@ -453,9 +448,6 @@ const callOnLine = async (name, args) => {
 const LINE_REQUIRED = /"(?:error|code)"\s*:\s*"line_required"/
 const lineRequired = (out) => LINE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
 
-// A per-call payment on a funded channel is refused, unspent: the server serves
-// paid work on a line once the channel holds collateral. When it says so, ride
-// a line for this call rather than hand the refusal to the caller.
 const payOrRide = async (name, args) => {
   const out = await payFirst(name, args)
   if (!lineRequired(out) || !channelId) return out
@@ -550,10 +542,6 @@ if (has('--refund')) {
     socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
   })
 
-  // A refund lowers what the seller has charged; the next voucher must start from
-  // there, not from the last one this client signed. Write the seller's post-refund
-  // state back, or the next deposit re-authorizes the refunded amount and the seller
-  // may claim it twice (audit 31).
   if (answer.op === 'refunded' && answer.channelState?.chargedCumulativeAmount !== undefined) {
     try {
       const prior = (await storage.get(channelId)) ?? {}
