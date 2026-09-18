@@ -246,7 +246,9 @@ const payNow = async (name, args) => {
     coldStart = false
     return upstream.callTool(name, args)
   }
-  let terms = name === 'tick' && !(await needsTopUp()) ? tickAccepts : accepts
+  const topUp = name === 'tick' && await needsTopUp()
+  if (topUp) log('collateral is below one block: this tick carries a deposit on the funding row, charged one block plus its gas like the first')
+  let terms = name === 'tick' && !topUp ? tickAccepts : accepts
   if (!terms) return upstream.callTool(name, args)
   for (const attempt of [1, 2]) {
     try {
