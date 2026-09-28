@@ -1,4 +1,5 @@
-import { createPublicClient, http as plainHttp, fallback, keccak256, toHex } from 'viem'
+import { createPublicClient, createWalletClient, http as plainHttp, fallback, keccak256, toHex } from 'viem'
+import { passRefund, rebaseChannel, sendSignedRefund, refundUrlBeside, readSeller, rememberRefundUrl, hearingHttp, withGrant } from './refund.mjs'
 import { privateKeyToAccount } from 'viem/accounts'
 import * as chains from 'viem/chains'
 import { x402Client, x402HTTPClient, wrapFetchWithPayment } from '@x402/fetch'
@@ -19,7 +20,7 @@ const queue = () => {
 
 const saltOf = (raw) => /^0x[0-9a-fA-F]{64}$/.test(String(raw).trim()) ? String(raw).trim() : keccak256(toHex(String(raw)))
 
-function wallet({ key, url, network, stateDir, depositMultiplier, asset, salt, rpcUrl, log }) {
+function wallet({ key, url, network, stateDir, depositMultiplier, asset, salt, rpcUrl, grant, log }) {
   if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
     throw new Error('prism(): key must be a 0x-prefixed 32-byte private key. It signs vouchers locally and is never sent anywhere.')
   }
@@ -58,10 +59,13 @@ function wallet({ key, url, network, stateDir, depositMultiplier, asset, salt, r
       ...(salt ? { salt: saltOf(salt) } : {}),
     }))
   const httpClient = new x402HTTPClient(payments)
-  const paidFetch = wrapFetchWithPayment(fetch, payments)
+  const seller = { refund: readSeller(dir).refund ?? null }
+  const net = hearingHttp(withGrant(fetch, grant), (u) => { seller.refund = u; rememberRefundUrl(dir, u) })
+  const paidFetch = wrapFetchWithPayment(net, payments)
   const oneAtATime = queue()
   log(`prism: paying as ${account.address}, state in ${dir}`)
-  return { account, state, payments, httpClient, paidFetch, oneAtATime, dir }
+  const wallets = createWalletClient({ account, chain: payChain, transport: plainHttp(rpcUrl ?? payChain.rpcUrls?.default?.http?.[0]) })
+  return { account, state, seller, net, storage: watched, pub, wallets, payments, httpClient, paidFetch, oneAtATime, dir }
 }
 
 function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
@@ -88,7 +92,7 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
   const terms = async () => {
     if (s.tickTerms) return s.tickTerms
     try {
-      const j = await (await fetch(new URL('/.well-known/x402', url))).json()
+      const j = await (await w.net(new URL('/.well-known/x402', url), { signal: AbortSignal.timeout(10_000) })).json()
       const accepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length ? j.tickAccepts : j.accepts
       if (Array.isArray(accepts) && accepts.length) s.tickTerms = { x402Version: j.x402Version ?? 2, accepts }
     } catch { }
@@ -142,7 +146,7 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
     const post = async (terms) => {
       const payload = await w.payments.createPaymentPayload(terms)
       const headers = { ...w.httpClient.encodePaymentSignatureHeader(payload), [LINE_HEADER]: s.credential, 'content-type': 'application/json' }
-      const res = await fetch(new URL('/v1/buy_time', url), { method: 'POST', headers, body: '{}' })
+      const res = await w.net(new URL('/v1/buy_time', url), { method: 'POST', headers, body: '{}' })
       await w.httpClient.processPaymentResult(payload, (n) => res.headers.get(n), res.status).catch(() => {})
       return res
     }
@@ -170,7 +174,7 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
     s.topping = (async () => { while (s.credential && remaining() < aheadMs) { if (!(await tickOnce())) break } })().finally(() => { s.topping = null })
     return s.topping
   }
-  const refund = async () => {
+  const prismRefund = async () => {
     const channelId = w.state.channelId
     if (!channelId) return { op: 'refund_failed', why: 'no channel' }
     const issued = new Date().toISOString()
@@ -186,7 +190,7 @@ function line({ url, w, aheadMs, idleMs, dropAfterMs, log }) {
       socket.onerror = () => { clearTimeout(timer); resolve({ op: 'refund_failed', why: 'socket error' }) }
     })
   }
-  return { s, open, on, off, touch, ensure, topUp, drop, remaining, refund }
+  return { s, open, on, off, touch, ensure, topUp, drop, remaining, terms, prismRefund }
 }
 
 export function client(opts = {}) {
@@ -195,10 +199,11 @@ export function client(opts = {}) {
     chain = 'base', network = process.env.X402_NETWORK ?? 'eip155:8453',
     stateDir = process.env.X402_STATE_DIR, depositMultiplier = process.env.X402_DEPOSIT_MULTIPLIER,
     asset = process.env.X402_ASSET, salt = process.env.X402_SALT, rpcUrl = process.env.X402_RPC_URL,
+    grant = process.env.X402_GRANT,
     aheadMs = 2000, idleMs = 1000, dropAfterMs = 10_000, blockMs = 250,
     log = (...a) => console.error(...a),
   } = opts
-  const w = wallet({ key, url, network, stateDir, depositMultiplier, asset, salt, rpcUrl, log })
+  const w = wallet({ key, url, network, stateDir, depositMultiplier, asset, salt, rpcUrl, grant, log })
   const l = line({ url, w, aheadMs, idleMs, dropAfterMs, log })
   const door = new URL(`/rpc/${chain}`, url).toString()
 
@@ -217,7 +222,7 @@ export function client(opts = {}) {
         await l.on()
         if (!(await l.ensure(blockMs + 50))) continue
         l.topUp()
-        const r = await fetch(withLine(req.clone()))
+        const r = await w.net(withLine(req.clone()))
         l.touch()
         if (r.status !== 402) return r
         const code = await codeOf(r)
@@ -234,12 +239,21 @@ export function client(opts = {}) {
     throw new Error('prism: could not hold a line after three attempts')
   }
 
-  const refund = async () => {
+  const refund = async ({ selfSend = false } = {}) => {
     l.drop('refunding')
     await w.oneAtATime(() => {})
+    const channelId = w.state.channelId
+    if (!channelId) return { op: 'refund_failed', why: 'no channel' }
+    const passUrl = w.seller.refund ?? ((await l.terms()) ? null : refundUrlBeside(url))
+    if (passUrl) {
+      let a = await passRefund({ url: passUrl, channelId, signer: w.account, selfSend, fetchFn: w.net, log })
+      if (a.op === 'refund_signed') a = await sendSignedRefund({ answer: a, account: w.account, pub: w.pub, wallet: w.wallets, storage: w.storage, channelId, log })
+      if (a.op === 'refunded' && a.channelState && a.gasPaidBy !== 'you') await rebaseChannel(w.storage, channelId, a.channelState).catch((e) => log(`prism: could not rebase the channel after the refund: ${e.message}`))
+      return a
+    }
     let r
     for (let i = 0; i < 6; i++) {
-      r = await l.refund()
+      r = await l.prismRefund()
       if (r.op === 'refunded' || (r.code ? r.code !== 'request_open' : !/still open/.test(String(r.why ?? '')))) return r
       await new Promise((res) => setTimeout(res, 1000))
     }

@@ -23,3 +23,11 @@ export const paymentsFor = ({ signer, pub, network, batch = {}, selector }) => {
     .register(network, new BatchSettlementEvmScheme(s, batch))
     .register(network, new ExactEvmScheme(s))
 }
+
+export const paymentRefused = (out) => {
+  if (!out?.isError) return false
+  let body = out.structuredContent
+  if (!body || typeof body !== 'object') { try { body = JSON.parse(String(out?.content?.[0]?.text ?? '')) } catch { return false } }
+  if (body?.code === 'payment_invalid') return true
+  return body?.x402Version !== undefined && /^(invalid_|insufficient_|cumulative_)/.test(String(body?.error ?? ''))
+}

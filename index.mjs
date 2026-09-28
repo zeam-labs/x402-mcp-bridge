@@ -5,11 +5,12 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { wrapMCPClientWithPayment } from '@x402/mcp'
-import { paymentsFor, selectorFor } from './client.mjs'
+import { paymentsFor, selectorFor, paymentRefused } from './client.mjs'
 import { toClientEvmSigner } from '@x402/evm'
 import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
 import { privateKeyToAccount } from 'viem/accounts'
-import { createPublicClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
+import { createPublicClient, createWalletClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
+import { passRefund, rebaseChannel, sendSignedRefund, refundUrlBeside, readSeller, rememberRefundUrl, hearingMcp, withGrant } from './refund.mjs'
 import * as chains from 'viem/chains'
 import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -22,6 +23,7 @@ const KEY = process.env.X402_PRIVATE_KEY ?? process.env.PRISM_PRIVATE_KEY
 const NETWORK = process.env.X402_NETWORK ?? 'eip155:8453'
 const WANT = (process.env.X402_ASSET ?? '').toLowerCase()
 const NAME = process.env.X402_NAME ?? 'x402-bridge'
+const GRANT = process.env.X402_GRANT || null
 const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version
 const log = (...a) => console.error('[x402-bridge]', ...a)
 
@@ -45,11 +47,15 @@ if (has('--help') || has('-h')) {
     '     X402_DEPOSIT_MULTIPLIER (default 40; refundable collateral to lock, as a multiple of',
     '     the opening quote; unset uses the x402 scheme default, minimum 3),',
     '     X402_LINE=auto|on|off,',
-    '     X402_SALT.',
+    '     X402_SALT,',
+    '     X402_GRANT (an x-grant from a wallet a gate admits, sent on every request).',
 '     auto: buy per-call minimum holds until calls arrive faster than the',
 '     server minimum hold, then hold a line while that lasts. A held line',
 '     bills wall-clock whether you call or not, so holding a line for a',
 '     sparse caller costs several times what the slices would have.',
+    '',
+    '  --refund asks the seller to send back what the channel did not spend.',
+    '  --refund --self-send asks for a signed refund and sends it from this key, at its own gas.',
     '',
   ].join('\n'))
   process.exit(0)
@@ -167,12 +173,100 @@ const payments = KEYLESS ? null : paymentsFor({ signer: cardSigner ?? account, p
     ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
   } })
 
+const wsURL = () => {
+  const u = new URL(UPSTREAM)
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+  u.pathname = '/pay'
+  u.search = ''
+  return u.toString()
+}
+
+const sellsLines = async () => {
+  try {
+    const j = await (await fetch(new URL('/.well-known/x402', UPSTREAM), { signal: AbortSignal.timeout(10_000) })).json()
+    return Array.isArray(j?.accepts) && j.accepts.length > 0
+  } catch { return false }
+}
+
+const prismRefund = async () => {
+  const issued = new Date().toISOString()
+  const message = `ZEAM Prism refund\nchannel: ${String(channelId).toLowerCase()}\nissued: ${issued}`
+  const signature = await account.signMessage({ message })
+  const answer = await new Promise((resolve) => {
+    let socket
+    try { socket = new WebSocket(wsURL()) } catch (e) { return resolve({ error: e.message }) }
+    const done = setTimeout(() => { try { socket.close() } catch {} ; resolve({ error: 'no answer in 60s' }) }, 60_000)
+    socket.onopen = () => socket.send(JSON.stringify({ op: 'refund', channelId, issued, signature }))
+    socket.onmessage = (ev) => {
+      let m; try { m = JSON.parse(String(ev.data)) } catch { return }
+      if (m.op === 'refunding') return log(m.note ?? 'refunding')
+      if (m.op === 'refunded' || m.op === 'refund_failed' || m.error) {
+        clearTimeout(done); try { socket.close() } catch {} ; resolve(m)
+      }
+    }
+    socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
+  })
+  return answer
+}
+
+if (has('--refund')) {
+  if (!channelId) { process.stderr.write('no channel to refund — nothing has been bought with this key and salt\n'); process.exit(2) }
+  const selfSend = has('--self-send')
+  const remembered = readSeller(stateDir).refund ?? null
+  const passUrl = remembered ?? ((await sellsLines()) ? null : refundUrlBeside(UPSTREAM))
+  let answer
+  if (passUrl) {
+    log(`asking for the refund at ${passUrl}${remembered ? ', the address the seller\'s 402 names' : ''}`)
+    answer = await passRefund({ url: passUrl, channelId, signer: account, payer: CARD_PAYER ? null : account, selfSend, log })
+    if (answer.op === 'refund_signed') {
+      const wallet = createWalletClient({ account, chain, transport: http(process.env.X402_RPC_URL ?? chain.rpcUrls.default.http[0]) })
+      answer = await sendSignedRefund({ answer, account, pub, wallet, storage, channelId, log }).catch((e) => ({ ...answer, sent: false, why: `${answer.why ?? ''} Could not send it from here: ${e?.shortMessage ?? e?.message}`.trim() }))
+    }
+  } else {
+    answer = await prismRefund()
+  }
+  if (answer.op === 'refunded' && answer.channelState && answer.gasPaidBy !== 'you') {
+    try {
+      if (await rebaseChannel(storage, channelId, answer.channelState)) log(`channel rebased to ${answer.channelState.chargedCumulativeAmount} charged after the refund`)
+    } catch (e) { log(`could not rebase the channel after the refund: ${e.message}`) }
+  }
+  process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
+  if (answer.op === 'refunded') {
+    if (answer.returnedMicroUSD !== undefined) log(`returned ${answer.returnedMicroUSD} micro-USD, gas ${answer.gasMicroUSD ?? 0} micro-USD${answer.gasPaidBy === 'you' ? ' paid in ETH by this key' : ''}`)
+    process.exit(0)
+  }
+  if (answer.code === 'nothing_to_return') {
+    const left = Number(answer.leftMicroUSD ?? 0)
+    log(left > 0
+      ? `nothing comes back: ${left} micro-USD is left and sending it costs ${answer.gasMicroUSD ?? '?'} micro-USD of gas. --refund --self-send gets a signed refund of all of it to send at your own gas.`
+      : 'nothing comes back: this channel is fully spent')
+    process.exit(left > 0 ? 1 : 0)
+  }
+  if (answer.op === 'refund_signed') {
+    log('the refund is signed and yours to send: any wallet on Base can send the transaction above')
+    process.exit(1)
+  }
+  process.stderr.write([
+    '',
+    'The exit that always works needs nothing from us:',
+    '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
+    ...(passUrl ? [] : [
+      'We also watch for that first call and return the collateral ourselves, at our gas,',
+      'so you usually do not have to send the second transaction — but not on a promised',
+      'schedule; it can lag until just past the delay window. Plan against the delay.']),
+    'The escrow gates withdrawal to you alone, so your unspent collateral is safe either way.',
+    '',
+  ].join('\n'))
+  process.exit(1)
+}
+
 const plain = new Client({ name: NAME, version: VERSION })
 const upstream = KEYLESS
   ? { connect: (t) => plain.connect(t), listTools: () => plain.listTools(),
       callTool: (name, args) => plain.callTool({ name, arguments: args ?? {} }) }
   : wrapMCPClientWithPayment(plain, payments, { autoPayment: true })
-await upstream.connect(new StreamableHTTPClientTransport(new URL(UPSTREAM)))
+const heard = hearingMcp(withGrant(fetch, GRANT), (u) => rememberRefundUrl(stateDir, u))
+await upstream.connect(new StreamableHTTPClientTransport(new URL(UPSTREAM), { fetch: heard }))
 log(KEYLESS ? `catalog from ${UPSTREAM}, paying nothing` : `paying as ${account.address} -> ${UPSTREAM}`)
 
 const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
@@ -258,7 +352,7 @@ const payNow = async (name, args) => {
         continue
       }
       if (explainPermit2(out)) return out
-      if (refusedPayment(out)) {
+      if (paymentRefused(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
         if (channelId) { try { await watchedStorage.delete(channelId) } catch {} }
         return upstream.callTool(name, args)
@@ -289,11 +383,6 @@ const explainPermit2 = (out) => {
   return true
 }
 
-function refusedPayment(out) {
-  if (!out?.isError) return false
-  const body = String(out?.content?.[0]?.text ?? '')
-  return /x402Version/.test(body) && /"error"\s*:\s*"(invalid_|insufficient_|cumulative_)/.test(body)
-}
 if (!KEYLESS) log(`channel state in ${stateDir}`)
 
 const LINE_MODE = (process.env.X402_LINE ?? 'auto').toLowerCase()
@@ -315,14 +404,6 @@ function holdingIsCheaper() {
 
   if (line.credential) return rate.slowRun < AUTO_SLOW_RUN
   return rate.fastRun >= AUTO_FAST_RUN
-}
-
-const wsURL = () => {
-  const u = new URL(UPSTREAM)
-  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  u.pathname = '/pay'
-  u.search = ''
-  return u.toString()
 }
 
 const dropLine = (why) => {
@@ -537,55 +618,6 @@ if (has('--call')) {
     await stopPayingQuietly()
     process.exit(1)
   }
-}
-
-if (has('--refund')) {
-  if (!channelId) { process.stderr.write('no channel to refund — nothing has been bought with this key and salt\n'); process.exit(2) }
-
-  const issued = new Date().toISOString()
-  const message = `ZEAM Prism refund\nchannel: ${String(channelId).toLowerCase()}\nissued: ${issued}`
-  const signature = await account.signMessage({ message })
-
-  const answer = await new Promise((resolve) => {
-    let socket
-    try { socket = new WebSocket(wsURL()) } catch (e) { return resolve({ error: e.message }) }
-    const done = setTimeout(() => { try { socket.close() } catch {} ; resolve({ error: 'no answer in 60s' }) }, 60_000)
-    socket.onopen = () => socket.send(JSON.stringify({ op: 'refund', channelId, issued, signature }))
-    socket.onmessage = (ev) => {
-      let m; try { m = JSON.parse(String(ev.data)) } catch { return }
-      if (m.op === 'refunding') return log(m.note ?? 'refunding')
-      if (m.op === 'refunded' || m.op === 'refund_failed' || m.error) {
-        clearTimeout(done); try { socket.close() } catch {} ; resolve(m)
-      }
-    }
-    socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
-  })
-
-  if (answer.op === 'refunded' && answer.channelState?.chargedCumulativeAmount !== undefined) {
-    try {
-      const prior = (await storage.get(channelId)) ?? {}
-      const cs = answer.channelState
-      await storage.set(channelId, { ...prior, chargedCumulativeAmount: String(cs.chargedCumulativeAmount),
-        ...(cs.balance !== undefined ? { balance: String(cs.balance) } : {}),
-        ...(cs.totalClaimed !== undefined ? { totalClaimed: String(cs.totalClaimed) } : {}),
-        signedMaxClaimable: String(cs.chargedCumulativeAmount), signature: undefined })
-      log(`channel rebased to ${cs.chargedCumulativeAmount} charged after the refund`)
-    } catch (e) { log(`could not rebase the channel after the refund: ${e.message}`) }
-  }
-  process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
-  if (answer.op !== 'refunded') {
-    process.stderr.write([
-      '',
-      'The exit that always works needs nothing from us:',
-      '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
-      'We also watch for that first call and return the collateral ourselves, at our gas,',
-      'so you usually do not have to send the second transaction — but not on a promised',
-      'schedule; it can lag until just past the delay window. Plan against the delay. The',
-      'escrow gates withdrawal to you alone, so your unspent collateral is safe either way.',
-      '',
-    ].join('\n'))
-  }
-  process.exit(answer.op === 'refunded' ? 0 : 1)
 }
 
 await server.connect(new StdioServerTransport())

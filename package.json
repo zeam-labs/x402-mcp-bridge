@@ -7,12 +7,17 @@
     "x402-mcp-bridge": "index.mjs"
   },
   "main": "index.mjs",
+  "scripts": {
+    "test": "node test/exact.mjs && node --test test/*.test.mjs",
+    "smoke": "node --test test/smoke-pass.mjs"
+  },
   "files": [
     "README.md",
     "client.mjs",
     "ethers.mjs",
     "index.mjs",
     "pay.mjs",
+    "refund.mjs",
     "viem.mjs"
   ],
   "engines": {

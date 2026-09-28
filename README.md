@@ -23,6 +23,28 @@ With your key already exported into the environment as `X402_PRIVATE_KEY`:
 That pays for the call and prints the answer. Nothing else to write. With no
 arguments this is still an MCP stdio server, which is what an MCP client wants.
 
+## Getting back what you did not spend
+
+    npx -y @zeam-labs/x402-mcp-bridge --refund
+
+On a ZEAM :: Pass seller this posts `{channelId, issued, signature}` to the refund
+address the seller's 402 names (else `<base>/refund` beside `/mcp`), signed by your
+key over:
+
+    ZEAM Pass refund
+    channel: <channel id, lowercase>
+    issued: <ISO time>
+
+When the channel's fees cover the gas, the seller sends all of it back. When they do
+not, the seller quotes exactly that gas; the bridge signs a gasless USDC payment of it
+from your key and asks again, and one transaction returns the rest to you. It prints
+`returnedMicroUSD` and `gasMicroUSD`, and rebases the local channel. When the gas is
+more than what is left, the answer is `nothing_to_return` with the numbers.
+
+`--refund --self-send` asks for a signed refund of all of it instead, and sends it from
+your key at your own gas if the key holds ETH on Base; otherwise it prints the
+transaction for any wallet to send.
+
 ## The line, and when this client drops it
 
 While a line's meter is on, the server bills wall-clock time whether or not you
@@ -220,6 +242,7 @@ time and an overlapping tick is refused as `channel_busy`.
 | `X402_RPC_URL` | the chain's own public RPC | chain reads. Point it at your own node — checking a seller's claims through the seller proves nothing. |
 | `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
 | `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
+| `X402_GRANT` | — | an `x-grant` from a wallet a gate admits: sent as the `x-grant` header on every request, over MCP and HTTP, so a delegate can pass that gate |
 | `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
 | `X402_DEPOSIT_MULTIPLIER` | `40` | how much **refundable** collateral to lock, as a multiple of the seller's quote, on the first deposit and on every top-up. Every deposit is charged the seller's open fee (the gas of that deposit), so the multiplier sets the gas share of your bill: at Prism's quotes today, 5x buys ~7 s of metered time per ~1.5 k micro-USD of gas (~22% on top of the rate), 40x ~1.2 min per deposit (~2.5%). The x402 scheme's minimum is 3. A top-up is a deposit on the same funding quote, made when the collateral behind a tick is below one block. |
 
