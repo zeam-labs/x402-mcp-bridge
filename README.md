@@ -182,6 +182,8 @@ built on the official `x402` Python SDK, and installs from this repository at a
 commit, which cannot be altered: `pip install 'git+https://github.com/zeam-labs/x402-mcp-bridge@<commit>#subdirectory=python'`.
 It is not on PyPI. `test/ethers.mjs` and
 `python/test/live.py` prove each against a live server.
+The Python one spends real money from the key; run it from `python/` as
+`PRISM_TEST_URL=https://mcp.zeamprism.com X402_PRIVATE_KEY=0x... python test/live.py`.
 
 ## Holding a line
 

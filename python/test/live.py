@@ -1,6 +1,3 @@
-# Drive the provider against a live Prism. Spends real money from the key.
-#
-#   PRISM_TEST_URL=https://mcp.zeamprism.com X402_PRIVATE_KEY=0x... python test/live.py
 import os, sys, time, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from web3 import Web3
