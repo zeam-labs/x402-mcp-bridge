@@ -212,9 +212,10 @@ test('no X402_GRANT: no x-grant header on /mcp', async () => {
 
 test('the HTTP client sends x-grant, learns the refund URL from a 402, and refunds there', async () => {
   const s = await fakeSeller({ refund: () => refunded() })
+  const rpc = await fakeRpc({ eth_chainId: '0x2105', eth_call: '0x' + '0'.repeat(128) })
   try {
     const dir = mkdtempSync(join(tmpdir(), 'bridge-test-'))
-    const c = client({ key: KEY, url: `${s.base}/agents`, stateDir: dir, grant: 'grant-token-http', log: quiet })
+    const c = client({ key: KEY, url: `${s.base}/agents`, stateDir: dir, rpcUrl: rpc.url, grant: 'grant-token-http', log: quiet })
     const r = await c.fetch(`${s.base}/agents/v1/add`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1,"b":2}' })
     assert.equal(r.status, 200)
     assert.equal(s.seen.http.length, 2, '402, then paid')
@@ -222,7 +223,7 @@ test('the HTTP client sends x-grant, learns the refund URL from a 402, and refun
     assert.equal(JSON.parse(readFileSync(join(dir, 'seller.json'), 'utf8')).refund, `${s.base}/agents/refund`)
     const seeded = stateWithChannel()
     copyFileSync(join(dir, 'seller.json'), join(seeded, 'seller.json'))
-    const c2 = client({ key: KEY, url: `${s.base}/agents`, stateDir: seeded, log: quiet })
+    const c2 = client({ key: KEY, url: `${s.base}/agents`, stateDir: seeded, rpcUrl: rpc.url, log: quiet })
     const a = await c2.refund()
     assert.equal(a.op, 'refunded')
     assert.equal(s.seen.refunds.length, 1)
@@ -231,7 +232,7 @@ test('the HTTP client sends x-grant, learns the refund URL from a 402, and refun
     assert.equal(s.seen.pay, 0)
     await c2.close()
     await c.close()
-  } finally { await s.close() }
+  } finally { await s.close(); await rpc.close() }
 })
 
 test('a refused payment is read from code, not error', () => {

@@ -19,12 +19,17 @@ const json = (res, status, body, headers = {}) => { res.writeHead(status, { 'con
 export const refundSentence = (url) =>
   `what you don't spend is yours: POST ${url} with {channelId, issued, signature} signed by the payer. We send it; if this channel's fees don't cover the gas (about $0.004029), you sign a gasless USDC payment of exactly that gas and we send both together. One refund per channel per hour. {"selfSend": true} gives you a signed refund to send yourself at your own gas.`
 
-export function passTerms(base, refundPath = '/agents/refund') {
+const ROWS = {
+  exact: { scheme: 'exact', network: 'eip155:8453', amount: '10000', asset: USDC, payTo: SELLER_WALLET, maxTimeoutSeconds: 300, extra: { name: 'USD Coin', version: '2' } },
+  batch: { scheme: 'batch-settlement', network: 'eip155:8453', amount: '10000', asset: USDC, payTo: SELLER_WALLET, maxTimeoutSeconds: 240, extra: { name: 'USD Coin', version: '2', receiverAuthorizer: SELLER_WALLET, withdrawDelay: 86400 } },
+}
+
+export function passTerms(base, refundPath = '/agents/refund', row = 'exact') {
   return {
     x402Version: 2,
     error: 'payment_required',
     resource: { url: `${base}/agents/mcp`, description: 'Adds two numbers.', mimeType: 'application/json' },
-    accepts: [{ scheme: 'exact', network: 'eip155:8453', amount: '10000', asset: USDC, payTo: SELLER_WALLET, maxTimeoutSeconds: 300, extra: { name: 'USD Coin', version: '2' } }],
+    accepts: [ROWS[row]],
     pricing: '$0.01 per call, exactly. A call whose work fails is not charged.',
     refund: refundSentence(`${base}${refundPath}`),
   }
@@ -73,7 +78,7 @@ export async function fakeSeller({ refund = () => ({ status: 404, body: { error:
     if (path.startsWith('/agents/v1/')) {
       seen.http.push({ path, headers: req.headers })
       if (http402 && !req.headers['payment-signature']) {
-        const terms = passTerms(base)
+        const terms = passTerms(base, '/agents/refund', 'batch')
         return json(res, 402, terms, { 'payment-required': Buffer.from(JSON.stringify(terms)).toString('base64') })
       }
       return json(res, 200, { sum: 3 })
