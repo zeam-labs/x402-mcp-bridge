@@ -2,109 +2,114 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
+`@zeam-labs/x402-mcp-bridge` 2.5.0 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
 
-Published from this source at the tagged version. npm's integrity hash is of that
-build — verify it before you run anything against your key.
+A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
+ZEAM Prism and with any ZEAM :: Pass seller.
 
-Put a wallet in front of a paid MCP server.
+## Run it
 
-## One command, no MCP client
-
-A headless agent does not run a desktop MCP client. It runs a shell. So:
-
-With your key already exported into the environment as `X402_PRIVATE_KEY`:
-
-    npx -y @zeam-labs/x402-mcp-bridge \
-      --call call_rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
+Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
 
     npx -y @zeam-labs/x402-mcp-bridge --tools
+    npx -y @zeam-labs/x402-mcp-bridge --call call_rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
+    X402_MCP_URL=https://seller.example/agents/mcp npx -y @zeam-labs/x402-mcp-bridge --call add '{"a":1,"b":2}'
 
-That pays for the call and prints the answer. Nothing else to write. With no
-arguments this is still an MCP stdio server, which is what an MCP client wants.
-
-## The line, and when this client drops it
-
-While a line's meter is on, the server bills wall-clock time whether or not you
-call anything — that is what a line is, and there is no server-side idle timeout.
-This client does not touch the meter's switch; it drops its line after **four
-tick intervals (1000ms)** of no use, so a pause costs you a reopen rather than
-open-ended idle billing. Expect a line to reopen during a slow session.
-`X402_LINE=off` pays per call where the seller takes it. Prism serves a funded channel on a line, so there the bridge rides one for the call and lets it go.
-
-## Why you need it
-
-A metered MCP endpoint takes payment inside the tool call's `params._meta` — a
-signed x402 payload the **client** builds per call against accumulating channel
-state. No stock MCP client does that, so adding a paid endpoint to your config
-gets you `tools/list`, the free tools, and 402 on everything else, with no API
-key to paste because there is no API key.
-
-This is that client, wearing a stdio MCP server on the front. Your existing
-client talks to this; this talks money upstream.
+`--times N` repeats a `--call` in one process. With no arguments the bridge is an MCP stdio server:
 
 ```json
 {
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@2.5.0"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
 }
 ```
 
-Verify what you are about to run before you point a funded key at it; see
-[below](#why-the-versions-are-pinned-exactly).
+Without a key it serves `tools/list` and the free tools; a paid call returns the seller's terms.
 
-The key stays on your machine. It signs vouchers locally; it is never sent
-anywhere. The bridge holds no funds — your deposit sits in the upstream's
-settlement contract, withdrawable by your side of the channel alone: the
-`payer`, or the `payerAuthorizer` you named when the channel was opened, which
-for most clients is the same key but need not be.
+Results pass through whole: `content`, `structuredContent`, `isError` and `_meta`.
 
-That escrow is not the seller's. It is x402's own batch-settlement contract,
-hardcoded in [`@x402/evm`](https://www.npmjs.com/package/@x402/evm), published by
-Coinbase. No owner, no pause, no upgrade, no sweep.
+## Paying per call
 
-```
-npm pack @x402/evm@2.12.0 && grep -rl 0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003 package/
-```
+1. The bridge reads the terms once from `/.well-known/x402`, or from the seller's first 402.
+2. The first paid call deposits into a batch-settlement channel: price × `X402_DEPOSIT_MULTIPLIER` (default 40,
+   minimum 3), raised to the seller's floor (the 402's `deposit` line, or `neededMicroUSD`). On Prism: 250 µUSD × 40 =
+   $0.01.
+3. Later calls sign vouchers against that deposit. No gas, no round trip to ask the price.
 
-## Permit2 assets need one approval first
+The deposit sits in x402's batch-settlement escrow `0x4020074e9dF2ce1deE5A9C1b5c3f541D02a10003`, hardcoded in
+`@x402/evm`. No owner, no pause, no upgrade. Only your key can withdraw it.
 
-USDT, DAI and WETH settle through Permit2, so the wallet must approve the Permit2
-contract once before its first payment:
+## Line time
 
-```
-approve(0x000000000022D473030F116dDEE9F6B43aC78BA3, amount)   // on the token
-```
+A Pass seller that sells time lists `buy_time` and `line`, and tags its time tools `{"per":"time"}`. Prism:
+1 µUSD per ms, $0.00025 per 250 ms block. A paid call without a line costs one block and runs at most 250 ms. On a
+line a call costs the milliseconds it runs; calls at once burn once.
 
-A bounded amount is enough. Without it the payment is refused with
-`invalid_batch_settlement_evm_permit2_allowance_required`. USDC and EURC also
-accept EIP-3009, which needs no approval at all.
+1. **Buy.** `buy_time {"blocks": N}` pays N blocks from the channel. The bridge buys
+   `X402_LINE_AHEAD_MS` (default 2000 ms = 8 blocks), no more than the channel's collateral covers.
+2. **Open.** `POST <base>/line {"op":"open","channelId"}` returns a message. The bridge signs it (EIP-191) with the
+   payer key and posts `{"op":"prove","channelId","nonce","signature"}`; the answer carries the credential.
+3. **Ride.** Each time-tool call carries the credential in `_meta["zeam-pass/line"]`; no payment per call. The answer's
+   `_meta["zeam-pass/meter"]` states `msRemaining`.
+4. **Meter.** After `X402_LINE_IDLE_MS` (default 1000) with no call the bridge sends `{"op":"off"}`; the next call
+   sends `{"op":"on"}`. `meter_off` is switched on and called again; `out_of_time` buys twice the time and calls
+   again; `line_unknown` opens a new line.
+5. **Exit.** On exit the bridge sends `off`, then `close`. Unburned time comes back with a refund.
 
-## Paying without asking first
+`X402_LINE`:
 
-The stock x402 flow sends every call **unpaid**, reads the 402 it comes back
-with, and then sends the same call again carrying payment. Two network round
-trips for one call. At a 130ms round trip that is 260ms instead of 130ms. Those
-probes are also unpaid calls, and a server may cap how many of those it will
-answer, which is how a funded wallet gets locked out of a channel it has money in.
+| value | |
+|---|---|
+| `auto` (default) | per call until 2 time-tool calls arrive within 10 s (`X402_AUTO_FAST_RUN`, `X402_AUTO_GAP_MS`), then a line while it holds time. A call cut at one block (`out_of_time`) is called again on a line. |
+| `on` | every time-tool call rides a line. |
+| `off` | per call only. |
 
-The terms are static and published, so this bridge reads them once from
-`/.well-known/x402` at connect and attaches payment to its **first** request —
-no unpaid probe, no extra round trip.
+Tools priced per call never ride a line.
 
-A refused payment re-reads the terms and retries once, because quotes for
-non-stable assets move with the oracle. Anything still failing falls back to the
-old probe-then-pay path rather than dropping your call.
+## Refunds
 
-## Point a chain client at it
+    npx -y @zeam-labs/x402-mcp-bridge --refund
 
-An agent that already has a viem client does not want an MCP tool called `call_rpc`.
-It wants its provider URL to be a wallet instead of an API key:
+1. The bridge posts `{channelId, issued, signature}` to the refund route the seller names (its 402 or
+   `/.well-known/x402`), else `<base>/refund`. The key signs:
+
+        ZEAM Pass refund
+        channel: <channel id, lowercase>
+        issued: <ISO time>
+
+2. When the channel's fees cover the gas, the seller sends the balance and the unburned time: `returnedMicroUSD`,
+   `timeReturnedMs`, `gasMicroUSD: 0`.
+3. When they do not, the seller answers 409 `refund_quote` with the exact gas. The bridge signs a gasless USDC payment
+   of it and posts again; one transaction returns the rest.
+4. When the gas is more than what is left: `nothing_to_return` with the numbers.
+
+`--refund --self-send` asks for a signed refund of all of it and sends it from your key, at your gas, if the key holds
+ETH on Base. Otherwise it prints the transaction for any wallet to send.
+
+No answer from the seller: `initiateWithdraw`, then `finalizeWithdraw` after the channel's `withdrawDelay`.
+
+## Gates and grants
+
+A Pass gate admits listed keys by a zero-value payment: nothing moves. `X402_GRANT` is sent as the `x-grant` header on
+every request, over MCP and HTTP, so a key admitted by grant passes the gate.
+
+## Any x402 URL
+
+`x402_fetch` is offered beside the seller's tools. It calls a URL and pays a 402 under the x402 `exact` scheme.
+
+    npx -y @zeam-labs/x402-mcp-bridge --call x402_fetch '{"url":"https://api.example.com/v1/quote","body":{"symbol":"ETH"}}'
+
+- `pay: false` returns the terms without paying.
+- `maxAmount` (base units) refuses a larger quote before signing.
+- USDC counts toward `X402_MAX_SPEND`. Another asset is paid only with `maxAmount`.
+- A zero-value gate: signed, admitted, `paid: false`.
+
+## Chain clients
 
 ```js
 import { createPublicClient } from 'viem'
@@ -112,162 +117,57 @@ import { base } from 'viem/chains'
 import { prism } from '@zeam-labs/x402-mcp-bridge/viem'
 
 const client = createPublicClient({ chain: base, transport: prism({ key: process.env.X402_PRIVATE_KEY }) })
-await client.getBlockNumber()      // paid from the wallet, served by an archive node
+await client.getBlockNumber()
 ```
 
-Nothing else in the agent changes. The transport speaks JSON-RPC to Prism's
-`/rpc/base` (or `/rpc/eth` with `chain: 'eth'`) and x402 back. The first request
-funds a channel and buys one block. After that it holds a line: the meter is on
-while calls are flowing, off within a second of them stopping, and the line is
-let go after ten idle seconds. Vouchers cost no gas; only the deposit does.
-
-Options, all optional: `url` (the Prism host), `chain` (`base` | `eth`),
-`network`, `stateDir`, `depositMultiplier`, `asset`, `salt`, `rpcUrl` (a node
-of your own for the payment client's chain reads), `aheadMs` (bought time to
-keep on the meter while calling, default 2000), `idleMs` (meter off after this
-long with no call, default 1000), `dropAfterMs` (let the line go, default
-10000), `log`. Anything else is passed to viem's `http()`. The same `X402_*`
-environment variables the bridge reads are the defaults, and the channel state
-directory is shared, so a channel the bridge funded is the one the transport
-uses.
-
-The transport carries three extra methods: `state()` reports the address,
-channel, whether a line is held, whether the meter is on and the milliseconds
-left; `close()` switches the meter off and drops the line; `refund()` returns the
-unspent collateral and the time bought and not burned to the wallet. Call
-`close()` or `refund()` before your process exits, or the open socket keeps it
-alive.
-
-`test/viem.mjs` drives it against a live server with real money and checks each
-of those claims.
-
-The same wallet behind the other two libraries agents are written against:
-
 ```js
-import { PrismProvider } from '@zeam-labs/x402-mcp-bridge/ethers'   // ethers v6
+import { PrismProvider } from '@zeam-labs/x402-mcp-bridge/ethers'
 const provider = new PrismProvider({ key: process.env.X402_PRIVATE_KEY })
 ```
 
-```python
-from zeam_prism import PrismProvider                                  # web3.py, see python/README.md
-w3 = Web3(PrismProvider(key=os.environ["X402_PRIVATE_KEY"]))
-```
+1. The first request pays per call at `/rpc/base` (or `/rpc/eth`, `chain: 'eth'`) and funds the channel: 40 × the price,
+   at least the seller's floor.
+2. Then it opens a line, buys up to `aheadMs` (2000) of time from the collateral, and sends `x-line`.
+3. The meter goes off after `idleMs` (1000) idle; the line is let go after `dropAfterMs` (10000).
+4. `state()`, `close()`, `refund()`. Call `close()` or `refund()` before exit.
 
-Same options, same `state()`, `close()` and `refund()`, same channel state
-directory, so the three share one channel per key. ethers batches requests and
-the door answers a batch item by item. The Python package lives in `python/`, is
-built on the official `x402` Python SDK, and installs from this repository at a
-commit, which cannot be altered: `pip install 'git+https://github.com/zeam-labs/x402-mcp-bridge@<commit>#subdirectory=python'`.
-It is not on PyPI. `test/ethers.mjs` and
-`python/test/live.py` prove each against a live server.
-
-## Holding a line
-
-A server may sell **time** rather than calls, with a cheaper path than paying
-per call. The pricing is the server's — read it in its published terms — and this
-bridge drives it for you:
-
-1. Deposit once — your first paid call does it for you.
-2. Open a line on the endpoint's `/pay` websocket. If the server challenges,
-   the bridge signs the challenge with your key to prove the channel is yours,
-   and gets back a credential.
-3. Call the `buy_time` tool on a steady cadence, passing `{line: "<credential>"}`.
-   That is an ordinary paid call and it pays the server for more time.
-4. Every other call carries only `{line: "<credential>"}` and no payment, and as
-   many can be in flight at once as you like.
-
-Stop ticking and the line lapses. What the server charges, when a line lapses,
-and whether unused time is kept are the server's to state, not this bridge's.
-
-**This bridge drives a line for you.** `X402_LINE` controls it:
-
-| value | |
-|---|---|
-| `auto` *(default)* | pay per call until calls come fast, then hold a line while they keep coming and let it lapse when they stop. Where the seller serves a funded channel only on a line (Prism does), a `line_required` answer makes the bridge ride a line for that call, so the first call of a session is served either way. |
-| `on` | hold a line from startup and keep paying whether or not anyone calls. |
-| `off` | per-call payment only. Works against any x402 endpoint. |
-
-If the server refuses a call because the line is gone — an ordinary rotate or
-idle close — the bridge **reopens the line and retries**; a `line_required` answer is answered by riding a line for the call, and only pays per call
-if that fails too. That ordering matters: falling straight through to per-call
-payment turns one closed line into a signed payment per in-flight call,
-serialized behind one channel, and when those run out of road they become unpaid
-requests that burn the hourly ceiling and lock a funded wallet out of its own
-channel.
-
-**Cold starts.** A voucher signs a *cumulative* total, and that total is not on
-the chain — the escrow knows your balance and what has been claimed, not what has
-been metered. The only place it exists is the seller's 402. So on a cold start,
-or whenever a payment is refused as stale, the bridge spends one probing round
-trip to resync rather than handing you a failed call. Keep `X402_STATE_DIR` and
-it happens once; lose it, or run the same key on a second machine, and it happens
-again on the next call and then not after.
-
-Two things worth knowing if you write your own client. Pay a tick against
-`tickAccepts` from `/.well-known/x402`, not `accepts`. And never send two ticks at
-once: a voucher signs a cumulative total, so a channel carries one payment at a
-time and an overlapping tick is refused as `channel_busy`.
+Options: `url`, `chain`, `network`, `stateDir`, `depositMultiplier`, `asset`, `salt`, `rpcUrl`, `grant`, `aheadMs`,
+`idleMs`, `dropAfterMs`, `log`. The `X402_*` variables are the defaults; the state directory is shared with the bridge.
+`test/viem.mjs` and `test/ethers.mjs` run them against a live server with real money.
 
 ## Configuration
 
 | variable | default | |
 |---|---|---|
-| `X402_PRIVATE_KEY` | — | Funds the channel and signs vouchers. Without it the bridge still serves the catalog and the free tools; a paid call returns the seller's quote. |
-| `X402_MCP_URL` | `https://mcp.zeamprism.com/mcp` | any x402-paid MCP endpoint |
+| `X402_PRIVATE_KEY` | — | funds the channel and signs |
+| `X402_MCP_URL` | `https://mcp.zeamprism.com/mcp` | any x402 MCP endpoint |
+| `X402_LINE` | `auto` | `auto`, `on`, `off` |
+| `X402_LINE_AHEAD_MS` | `2000` | time bought per `buy_time` |
+| `X402_LINE_IDLE_MS` | `1000` | meter off after this idle |
+| `X402_MAX_SPEND` | `10000000` ($10) | ceiling for this run, µUSD; `0` removes it |
+| `X402_DEPOSIT_MULTIPLIER` | `40` | deposit = price × this, at least the seller's floor; minimum 3 |
+| `X402_GRANT` | — | `x-grant` on every request |
+| `X402_RPC_URL` | the chain's public RPC | your node for chain reads |
+| `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state; keep it |
+| `X402_SALT` | scheme default | a distinct channel |
+| `X402_ASSET` | first quoted | address or symbol |
 | `X402_NETWORK` | `eip155:8453` | CAIP-2 |
-| `X402_LINE` | `auto` | `auto`, `on` or `off` — see **Holding a line** above |
-| `X402_ASSET` | first quoted | address or symbol, if you hold a specific token |
-| `X402_RPC_URL` | the chain's own public RPC | chain reads. Point it at your own node — checking a seller's claims through the seller proves nothing. |
-| `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state |
-| `X402_SALT` | scheme default | open a distinct channel. Any string; it is hashed to bytes32 |
-| `X402_MAX_SPEND` | `10000000` (=$10) | ceiling on what **this run** may spend, in micro-USD. `0` removes it — see below |
-| `X402_DEPOSIT_MULTIPLIER` | `40` | how much **refundable** collateral to lock, as a multiple of the seller's quote, on the first deposit and on every top-up. Every deposit is charged the seller's open fee (the gas of that deposit), so the multiplier sets the gas share of your bill: at Prism's quotes today, 5x buys ~7 s of metered time per ~1.5 k micro-USD of gas (~22% on top of the rate), 40x ~1.2 min per deposit (~2.5%). The x402 scheme's minimum is 3. A top-up is a deposit on the same funding quote, made when the collateral behind a tick is below one block. |
 
-## It stops spending when you stop watching
+USDT, DAI and WETH settle through Permit2: approve `0x000000000022D473030F116dDEE9F6B43aC78BA3` once. USDC needs no
+approval.
 
-This process holds your key and pays without asking, so two limits bound it.
+## Limits
 
-**It dies with its parent.** `npx` is a wrapper, so a client killing its child
-kills npx and not this. A stdio server's parent going away closes stdin, and that
-is what this watches. `X402_LINE=auto` also lapses an unused line after four tick
-intervals; `X402_LINE=on` holds one regardless, so use it deliberately.
+- It exits when stdin closes, and lets its line go.
+- It stops at `X402_MAX_SPEND`: further calls return `x402_bridge_spend_cap_reached`.
+- Lost state costs one probe to resync, then one deposit.
 
-**It will not spend past `X402_MAX_SPEND`** (default 10,000,000 µUSD ≈ $10, about
-three hours of held line), counted from where the meter stood at startup. On
-reaching it the line drops and further calls return
-`x402_bridge_spend_cap_reached` with the numbers. `X402_MAX_SPEND=0` removes it.
+## Verify before you run it
 
-## Channel state matters
+The versions are pinned exactly.
 
-Keep `X402_STATE_DIR` on disk. A client that reconnects to an existing channel
-with empty state pays a deposit it did not need, and can only recover if its
-signer can **read the chain** — so this bridge always gives the signer a reader.
-By default that reader is the upstream's own free `/verify` surface, which means
-recovery costs nothing and needs no RPC of your own.
-
-The first call also makes the on-chain deposit, so it is slower than the rest;
-every call after it is fast. Losing state adds one more deposit-time call, then
-it is fast again.
-
-## What it does not do
-
-It does not custody funds, meter you, or add a fee. It forwards `tools/list` and
-`tools/call` unchanged and attaches payment. If the upstream is free, you do not
-need this.
-
-## Why the versions are pinned exactly
-
-Read this file — it is short on purpose — and you still cannot see what the
-dependencies do, and the signing happens inside them. Floating them on `"*"` means
-`npx -y` today and `npx -y` next month execute different code against your key. They are pinned to exact versions. Verify what you are about
-to run:
-
-    npm view @zeam-labs/x402-mcp-bridge version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge
+    npm view @zeam-labs/x402-mcp-bridge@2.5.0 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@2.5.0
     less package/index.mjs
-
-npm's integrity hash proves the bytes you fetched are the bytes that were
-published — not that we are honest. The file is short on
-purpose: read it.
 
 MIT.

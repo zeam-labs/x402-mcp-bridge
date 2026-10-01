@@ -4,9 +4,9 @@ import { client, LINE_HEADER } from './pay.mjs'
 export class PrismProvider extends JsonRpcProvider {
   constructor(opts = {}) {
     const { key, url, chain, network, stateDir, depositMultiplier, asset, salt, rpcUrl,
-            aheadMs, idleMs, dropAfterMs, blockMs, log, ethersNetwork, ...providerOptions } = opts
+            aheadMs, idleMs, dropAfterMs, log, ethersNetwork, ...providerOptions } = opts
     const c = client({ key, url, chain, network, stateDir, depositMultiplier, asset, salt, rpcUrl,
-                       aheadMs, idleMs, dropAfterMs, blockMs, log })
+                       aheadMs, idleMs, dropAfterMs, log })
     super(c.door, ethersNetwork, providerOptions)
     this.prism = c
   }
