@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.5.0
+## 3.0.0
 
 - Lines are ZEAM :: Pass lines: `POST <base>/line` open → EIP-191 proof by the payer key → credential, sent as
   `_meta["zeam-pass/line"]` (MCP) or `x-line` (HTTP). The `/pay` websocket is gone.
