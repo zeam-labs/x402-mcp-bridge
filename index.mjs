@@ -5,17 +5,19 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { wrapMCPClientWithPayment } from '@x402/mcp'
-import { paymentsFor, selectorFor, paymentRefused } from './client.mjs'
+import { paymentsFor, selectorFor, paymentRefused, floorStrategy, learnFloor } from './client.mjs'
 import { toClientEvmSigner } from '@x402/evm'
 import { FileClientChannelStorage } from '@x402/evm/batch-settlement/client/file-storage'
 import { privateKeyToAccount } from 'viem/accounts'
 import { createPublicClient, createWalletClient, http, fallback, keccak256, toHex, getAddress } from 'viem'
-import { passRefund, rebaseChannel, sendSignedRefund, refundUrlBeside, readSeller, rememberRefundUrl, hearingMcp, withGrant } from './refund.mjs'
+import { passRefund, rebaseChannel, sendSignedRefund, refundUrlBeside, refundUrlInTerms, readSeller, rememberRefundUrl, hearingMcp, withGrant } from './refund.mjs'
+import { LINE_META, PRICE_META, LINE_GONE, lineUrlOf, lineUrlBeside, timeOf, timeFromTerms, isTimeTag, bodyOf, codeOf, meterOf, blockTerms, blocksFor, openLine, lineOp } from './line.mjs'
+import { FETCH_TOOL, makeFetchTool } from './fetch.mjs'
 import * as chains from 'viem/chains'
-import { mkdtempSync, mkdirSync, readdirSync } from 'node:fs'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
 
 const UPSTREAM =
   process.env.X402_MCP_URL ?? process.env.X402_UPSTREAM ?? 'https://mcp.zeamprism.com/mcp'
@@ -33,29 +35,23 @@ const has = (name) => argv.includes(name)
 
 if (has('--help') || has('-h')) {
   process.stdout.write([
-    'x402-mcp-bridge — pay for MCP tools with a wallet.',
+    `x402-mcp-bridge ${VERSION} — pay for MCP tools with a wallet.`,
     '',
     '  With your key exported as X402_PRIVATE_KEY:',
     '',
-    '    npx -y @zeam-labs/x402-mcp-bridge --call rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
+    '    npx -y @zeam-labs/x402-mcp-bridge --call call_rpc \'{"chain":"base","method":"eth_blockNumber","params":[]}\'',
     '    npx -y @zeam-labs/x402-mcp-bridge --tools',
+    '    npx -y @zeam-labs/x402-mcp-bridge --call x402_fetch \'{"url":"https://…","pay":false}\'',
+    '    npx -y @zeam-labs/x402-mcp-bridge --refund',
     '',
-    'With no arguments it runs as an MCP stdio server, which is what an MCP client wants.',
+    'With no arguments it runs as an MCP stdio server.',
     '',
-    'Env: X402_PRIVATE_KEY (required), X402_MCP_URL (X402_UPSTREAM also accepted),',
-    '     X402_MAX_SPEND (0 = no cap; base units of the paid asset if the server publishes no price),',
-    '     X402_DEPOSIT_MULTIPLIER (default 40; refundable collateral to lock, as a multiple of',
-    '     the opening quote; unset uses the x402 scheme default, minimum 3),',
-    '     X402_LINE=auto|on|off,',
-    '     X402_SALT,',
-    '     X402_GRANT (an x-grant from a wallet a gate admits, sent on every request).',
-'     auto: buy per-call minimum holds until calls arrive faster than the',
-'     server minimum hold, then hold a line while that lasts. A held line',
-'     bills wall-clock whether you call or not, so holding a line for a',
-'     sparse caller costs several times what the slices would have.',
+    'Env: X402_PRIVATE_KEY, X402_MCP_URL, X402_LINE=auto|on|off, X402_MAX_SPEND (micro-USD, 0 = no cap),',
+    '     X402_DEPOSIT_MULTIPLIER (default 40, minimum 3), X402_LINE_AHEAD_MS (default 2000),',
+    '     X402_GRANT, X402_SALT, X402_ASSET, X402_RPC_URL, X402_STATE_DIR.',
     '',
-    '  --refund asks the seller to send back what the channel did not spend.',
-    '  --refund --self-send asks for a signed refund and sends it from this key, at its own gas.',
+    '  --refund            the seller sends back the unspent balance and the unburned line time.',
+    '  --refund --self-send  a signed refund, sent from this key at its own gas.',
     '',
   ].join('\n'))
   process.exit(0)
@@ -102,13 +98,12 @@ try {
 } catch {}
 
 const depositPolicy = { depositMultiplier: Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40) }
+const floor = { micro: 0 }
 
 const MAX_SPEND = Number(process.env.X402_MAX_SPEND ?? 10_000_000)
 let capReached = false
-
 let startedAt = null
 let spentMicroUSD = 0
-
 let quoteMicroUSD = null
 let spendUnit = 'micro-USD'
 
@@ -139,7 +134,7 @@ const noteBilled = (ctx) => {
   capReached = true
   log(`SPEND CAP REACHED — this run has spent ${spentMicroUSD} ${spendUnit} against a cap of ` +
     `${MAX_SPEND}. Paying for nothing further. Raise or remove it with X402_MAX_SPEND.`)
-  dropLine('spend cap reached')
+  letGo('spend cap reached')
 }
 
 const saltOf = (raw) => {
@@ -168,62 +163,37 @@ if (CARD_PAYER && account) {
 
 const payments = KEYLESS ? null : paymentsFor({ signer: cardSigner ?? account, pub, network: NETWORK, selector, batch: {
     depositPolicy,
+    depositStrategy: floorStrategy(floor),
     storage: watchedStorage,
     ...(CARD_PAYER ? { payerAuthorizer: account.address, voucherSigner: toClientEvmSigner(account, pub) } : {}),
     ...(process.env.X402_SALT ? { salt: saltOf(process.env.X402_SALT) } : {}),
   } })
 
-const wsURL = () => {
-  const u = new URL(UPSTREAM)
-  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  u.pathname = '/pay'
-  u.search = ''
-  return u.toString()
-}
+const net = withGrant(fetch, GRANT)
+const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
 
-const sellsLines = async () => {
-  try {
-    const j = await (await fetch(new URL('/.well-known/x402', UPSTREAM), { signal: AbortSignal.timeout(10_000) })).json()
-    return Array.isArray(j?.accepts) && j.accepts.length > 0
-  } catch { return false }
-}
-
-const prismRefund = async () => {
-  const issued = new Date().toISOString()
-  const message = `ZEAM Prism refund\nchannel: ${String(channelId).toLowerCase()}\nissued: ${issued}`
-  const signature = await account.signMessage({ message })
-  const answer = await new Promise((resolve) => {
-    let socket
-    try { socket = new WebSocket(wsURL()) } catch (e) { return resolve({ error: e.message }) }
-    const done = setTimeout(() => { try { socket.close() } catch {} ; resolve({ error: 'no answer in 60s' }) }, 60_000)
-    socket.onopen = () => socket.send(JSON.stringify({ op: 'refund', channelId, issued, signature }))
-    socket.onmessage = (ev) => {
-      let m; try { m = JSON.parse(String(ev.data)) } catch { return }
-      if (m.op === 'refunding') return log(m.note ?? 'refunding')
-      if (m.op === 'refunded' || m.op === 'refund_failed' || m.error) {
-        clearTimeout(done); try { socket.close() } catch {} ; resolve(m)
-      }
-    }
-    socket.onerror = (e) => { clearTimeout(done); resolve({ error: e?.message ?? 'socket error' }) }
-  })
-  return answer
+const seller = { time: null, lineUrl: null, refund: readSeller(stateDir).refund ?? null, tags: null }
+const learnTerms = (t) => {
+  if (!t || typeof t !== 'object') return
+  learnFloor(floor, t)
+  seller.time ??= timeFromTerms(t)
+  seller.lineUrl ??= lineUrlOf(t)
+  const r = refundUrlInTerms(t)
+  if (r && !seller.refund) { seller.refund = r; rememberRefundUrl(stateDir, r) }
 }
 
 if (has('--refund')) {
   if (!channelId) { process.stderr.write('no channel to refund — nothing has been bought with this key and salt\n'); process.exit(2) }
   const selfSend = has('--self-send')
-  const remembered = readSeller(stateDir).refund ?? null
-  const passUrl = remembered ?? ((await sellsLines()) ? null : refundUrlBeside(UPSTREAM))
-  let answer
-  if (passUrl) {
-    log(`asking for the refund at ${passUrl}${remembered ? ', the address the seller\'s 402 names' : ''}`)
-    answer = await passRefund({ url: passUrl, channelId, signer: account, payer: CARD_PAYER ? null : account, selfSend, log })
-    if (answer.op === 'refund_signed') {
-      const wallet = createWalletClient({ account, chain, transport: http(process.env.X402_RPC_URL ?? chain.rpcUrls.default.http[0]) })
-      answer = await sendSignedRefund({ answer, account, pub, wallet, storage, channelId, log }).catch((e) => ({ ...answer, sent: false, why: `${answer.why ?? ''} Could not send it from here: ${e?.shortMessage ?? e?.message}`.trim() }))
-    }
-  } else {
-    answer = await prismRefund()
+  if (!seller.refund) {
+    try { learnTerms(await (await net(termsURL, { signal: AbortSignal.timeout(10_000) })).json()) } catch {}
+  }
+  const url = seller.refund ?? refundUrlBeside(UPSTREAM)
+  log(`asking for the refund at ${url}`)
+  let answer = await passRefund({ url, channelId, signer: account, payer: CARD_PAYER ? null : account, selfSend, fetchFn: net, log })
+  if (answer.op === 'refund_signed') {
+    const wallet = createWalletClient({ account, chain, transport: http(process.env.X402_RPC_URL ?? chain.rpcUrls.default.http[0]) })
+    answer = await sendSignedRefund({ answer, account, pub, wallet, storage, channelId, log }).catch((e) => ({ ...answer, sent: false, why: `${answer.why ?? ''} Could not send it from here: ${e?.shortMessage ?? e?.message}`.trim() }))
   }
   if (answer.op === 'refunded' && answer.channelState && answer.gasPaidBy !== 'you') {
     try {
@@ -232,7 +202,7 @@ if (has('--refund')) {
   }
   process.stdout.write(JSON.stringify(answer, null, 2) + '\n')
   if (answer.op === 'refunded') {
-    if (answer.returnedMicroUSD !== undefined) log(`returned ${answer.returnedMicroUSD} micro-USD, gas ${answer.gasMicroUSD ?? 0} micro-USD${answer.gasPaidBy === 'you' ? ' paid in ETH by this key' : ''}`)
+    if (answer.returnedMicroUSD !== undefined) log(`returned ${answer.returnedMicroUSD} micro-USD, gas ${answer.gasMicroUSD ?? 0} micro-USD${answer.gasPaidBy === 'you' ? ' paid in ETH by this key' : ''}${answer.timeReturnedMs ? `, ${answer.timeReturnedMs} ms of unburned line time included` : ''}`)
     process.exit(0)
   }
   if (answer.code === 'nothing_to_return') {
@@ -248,12 +218,8 @@ if (has('--refund')) {
   }
   process.stderr.write([
     '',
-    'The exit that always works needs nothing from us:',
+    'The exit that always works needs nothing from the seller:',
     '  initiateWithdraw(config, amount)   then, after the delay, finalizeWithdraw(config)',
-    ...(passUrl ? [] : [
-      'We also watch for that first call and return the collateral ourselves, at our gas,',
-      'so you usually do not have to send the second transaction — but not on a promised',
-      'schedule; it can lag until just past the delay window. Plan against the delay.']),
     'The escrow gates withdrawal to you alone, so your unspent collateral is safe either way.',
     '',
   ].join('\n'))
@@ -261,46 +227,65 @@ if (has('--refund')) {
 }
 
 const plain = new Client({ name: NAME, version: VERSION })
+const heard = new AsyncLocalStorage()
+const rawCallTool = plain.callTool.bind(plain)
+plain.callTool = async (...a) => {
+  const r = await rawCallTool(...a)
+  const s = heard.getStore()
+  if (s) s.raw = r
+  return r
+}
+const whole = async (fn) => {
+  const s = { raw: null }
+  const out = await heard.run(s, fn)
+  if (!s.raw || !out) return out
+  return { ...s.raw, isError: out.isError ?? s.raw.isError }
+}
+
 const upstream = KEYLESS
   ? { connect: (t) => plain.connect(t), listTools: () => plain.listTools(),
       callTool: (name, args) => plain.callTool({ name, arguments: args ?? {} }) }
   : wrapMCPClientWithPayment(plain, payments, { autoPayment: true })
-const heard = hearingMcp(withGrant(fetch, GRANT), (u) => rememberRefundUrl(stateDir, u))
-await upstream.connect(new StreamableHTTPClientTransport(new URL(UPSTREAM), { fetch: heard }))
+const callFree = (name, args) => whole(() => upstream.callTool(name, args))
+const callPaid = (name, args, payload) => whole(() => upstream.callToolWithPayment(name, args, payload))
+const callOnLineRaw = (name, args, credential) => plain.callTool({ name, arguments: args, _meta: { [LINE_META]: credential } })
+
+const hearing = hearingMcp(net, (u) => { seller.refund = u; rememberRefundUrl(stateDir, u) }, learnTerms)
+await upstream.connect(new StreamableHTTPClientTransport(new URL(UPSTREAM), { fetch: hearing }))
 log(KEYLESS ? `catalog from ${UPSTREAM}, paying nothing` : `paying as ${account.address} -> ${UPSTREAM}`)
 
-const termsURL = new URL('/.well-known/x402', UPSTREAM).toString()
 let accepts = null
 let tickAccepts = null
-let lineFacts = { tickMs: 250, microUSDPerMs: null }
 const loadTerms = async () => {
-  const r = await fetch(termsURL)
+  const r = await net(termsURL, { signal: AbortSignal.timeout(10_000) })
   const j = await r.json()
   if (!Array.isArray(j.accepts) || !j.accepts.length) throw new Error('no accepts in well-known')
+  learnTerms(j)
   accepts = { x402Version: j.x402Version ?? 1, accepts: j.accepts }
   tickAccepts = Array.isArray(j.tickAccepts) && j.tickAccepts.length
     ? { x402Version: j.x402Version ?? 1, accepts: j.tickAccepts }
     : accepts
-  const ln = j.limits?.line ?? j.payment?.limits?.line
-  lineFacts = {
-    tickMs: Number(ln?.tickMs) > 0 ? Number(ln.tickMs) : lineFacts.tickMs,
-    microUSDPerMs: Number(j.rate?.microUSDPerMillisecond) > 0
-      ? Number(j.rate.microUSDPerMillisecond) : lineFacts.microUSDPerMs,
-  }
-
   const q = quoteFromTerms(j)
   if (q !== null) {
     if (q !== quoteMicroUSD) log(`quote: ${q} micro-USD per call, from the seller's own terms`)
     quoteMicroUSD = q; spendUnit = 'micro-USD'
   } else if (quoteMicroUSD === null) {
     spendUnit = 'base units of the paid asset'
-    log(`quote: this server publishes no micro-USD price, so X402_MAX_SPEND is read as ` +
-        `base units of the asset, not dollars.`)
+    log('quote: this server publishes no micro-USD price, so X402_MAX_SPEND is read as base units of the asset, not dollars.')
   }
   return accepts
 }
 try { await loadTerms(); log(`terms cached from ${termsURL} — paying without probing`) }
-catch (e) { log(`could not cache terms (${e.message}); falling back to probe-then-pay`) }
+catch (e) { log(`could not cache terms (${e.message}); paying on the seller's 402`) }
+
+const learnTools = (tools) => {
+  seller.tags = new Map(tools.map((t) => [t.name, t._meta?.[PRICE_META] ?? null]))
+  seller.time ??= timeOf(seller.tags.get('buy_time'))
+}
+const tagOf = async (name) => {
+  if (!seller.tags) { try { learnTools((await upstream.listTools()).tools) } catch { seller.tags = new Map() } }
+  return seller.tags.get(name) ?? null
+}
 
 let paymentQueue = Promise.resolve()
 const oneAtATime = (fn) => {
@@ -308,58 +293,71 @@ const oneAtATime = (fn) => {
   paymentQueue = run.then(() => {}, () => {})
   return run
 }
-
-const declarePaying = () => {
-  try { if (line.socket?.readyState === 1) line.socket.send(JSON.stringify({ op: 'paying' })) } catch { }
-}
-
-const payFirst = (name, args) => oneAtATime(() => { declarePaying(); return payNow(name, args) })
+const payFirst = (name, args) => oneAtATime(() => payNow(name, args))
 
 let coldStart = !channelId
-if (coldStart) log('no local channel state — probing once to learn where this channel stands')
+if (coldStart && !KEYLESS) log('no local channel state — probing once to learn where this channel stands')
 
-const OPEN_FEE_REQUIRED = /"code"\s*:\s*"funding_requires_open_fee"/
-const openFeeRequired = (out) => OPEN_FEE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
-
-const needsTopUp = async () => {
-  if (!channelId || !tickAccepts?.accepts?.length) return false
+const available = async () => {
+  if (!channelId) return null
   try {
     const c = await storage.get(channelId)
-    if (!c?.balance || c.chargedCumulativeAmount === undefined) return false
-    const asset = String(chosenAccept?.asset ?? '').toLowerCase()
-    const row = tickAccepts.accepts.find(r => String(r.asset ?? '').toLowerCase() === asset) ?? tickAccepts.accepts[0]
-    return BigInt(c.balance) - BigInt(c.chargedCumulativeAmount) < BigInt(row.amount ?? 0)
-  } catch { return false }
+    if (!c?.balance || c.chargedCumulativeAmount === undefined) return null
+    return Number(BigInt(c.balance) - BigInt(c.chargedCumulativeAmount))
+  } catch { return null }
+}
+
+const needsTopUp = async (terms) => {
+  if (!terms?.accepts?.length) return false
+  const left = await available()
+  if (left === null) return false
+  const asset = String(chosenAccept?.asset ?? '').toLowerCase()
+  const row = terms.accepts.find(r => String(r.asset ?? '').toLowerCase() === asset) ?? terms.accepts[0]
+  return BigInt(left) < BigInt(row.amount ?? 0)
 }
 
 const payNow = async (name, args) => {
-  if (KEYLESS) return upstream.callTool(name, args)
+  if (KEYLESS) return callFree(name, args)
   if (coldStart) {
     coldStart = false
-    return upstream.callTool(name, args)
+    const out = await callFree(name, args)
+    if (codeOf(out) !== 'funding_requires_open_fee' || !learnFloor(floor, bodyOf(out))) return out
+    log(`the seller's deposit floor is ${floor.micro} micro-USD: depositing that`)
+    return callFree(name, args)
   }
-  const topUp = name === 'tick' && await needsTopUp()
-  if (topUp) log('collateral is below one block: this tick carries a deposit on the funding row, charged one block plus its gas like the first')
-  let terms = name === 'tick' && !topUp ? tickAccepts : accepts
-  if (!terms) return upstream.callTool(name, args)
+  const buying = name === 'buy_time'
+  const blocks = buying ? Math.max(1, Math.trunc(Number(args?.blocks) || 1)) : 1
+  let terms = buying ? blockTerms(tickAccepts, blocks) : accepts
+  let funding = !buying
+  if (buying && await needsTopUp(terms)) {
+    log('the collateral is below this purchase: it carries a deposit on the funding row')
+    terms = blockTerms(accepts, blocks)
+    funding = true
+  }
+  if (!terms) return callFree(name, args)
   for (const attempt of [1, 2]) {
     try {
       const payload = await payments.createPaymentPayload(terms)
-      const out = await upstream.callToolWithPayment(name, args, payload)
-      if (name === 'tick' && terms === tickAccepts && openFeeRequired(out)) {
-        log('the server wants this deposit on the funding row: a top-up is charged one block plus its gas, like the first')
-        terms = accepts
-        continue
+      const out = await callPaid(name, args, payload)
+      const code = codeOf(out)
+      if (code === 'funding_requires_open_fee') {
+        const raised = learnFloor(floor, bodyOf(out))
+        if (raised || !funding) {
+          log(raised ? `the seller's deposit floor is ${floor.micro} micro-USD: depositing that` : 'the seller wants this deposit on the funding row')
+          if (buying) terms = blockTerms(accepts, blocks)
+          funding = true
+          continue
+        }
       }
       if (explainPermit2(out)) return out
       if (paymentRefused(out)) {
         log('payment refused as stale — dropping the local channel record and resyncing')
         if (channelId) { try { await watchedStorage.delete(channelId) } catch {} }
-        return upstream.callTool(name, args)
+        return callFree(name, args)
       }
       return out
     } catch (e) {
-      if (attempt === 2) { log(`pay-first failed twice (${e.message}); using probe path`); return upstream.callTool(name, args) }
+      if (attempt === 2) { log(`pay-first failed twice (${e.message}); paying on the seller's 402`); return callFree(name, args) }
       try { await loadTerms() } catch {}
     }
   }
@@ -368,221 +366,188 @@ const payNow = async (name, args) => {
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3'
 let approvalToldFor = null
 const explainPermit2 = (out) => {
-  const body = String(out?.content?.[0]?.text ?? '')
-  if (!/permit2_allowance_required/.test(body)) return false
+  if (!/permit2_allowance_required/.test(String(codeOf(out) ?? ''))) return false
   const token = chosenAccept?.asset
   if (!token || approvalToldFor === token) return true
   approvalToldFor = token
   const per = Number(chosenAccept?.amount ?? 0)
-  const mult = Number(process.env.X402_DEPOSIT_MULTIPLIER ?? 40)
-  const suggested = per > 0 ? BigInt(Math.ceil(per * mult * 4)) : 0n
+  const suggested = per > 0 ? BigInt(Math.ceil(per * depositPolicy.depositMultiplier * 4)) : 0n
   log(`${token} moves through Permit2 and your wallet has not approved it.`)
   log(`  send once, from your wallet:  approve(${PERMIT2}, ${suggested || '<amount>'})  on ${token}`)
-  log('  a bounded amount is enough — this covers several deposits at your current multiplier.')
-  log('  it is your transaction and costs gas; nothing else in this flow does.')
   return true
 }
 
 if (!KEYLESS) log(`channel state in ${stateDir}`)
 
 const LINE_MODE = (process.env.X402_LINE ?? 'auto').toLowerCase()
-
 const AUTO_FAST_RUN = Number(process.env.X402_AUTO_FAST_RUN ?? 2)
+const AUTO_GAP_MS = Number(process.env.X402_AUTO_GAP_MS ?? 10_000)
+const AHEAD_MS = Number(process.env.X402_LINE_AHEAD_MS ?? 2000)
+const IDLE_MS = Number(process.env.X402_LINE_IDLE_MS ?? 1000)
 
-const AUTO_SLOW_RUN = Number(process.env.X402_AUTO_SLOW_RUN ?? 4)
+const line = { credential: null, msRemaining: 0, metering: false, opening: null, offTimer: null, buys: 0 }
+const rate = { lastCallAt: 0, run: 0 }
+const lineUrl = () => seller.lineUrl ?? lineUrlBeside(UPSTREAM)
 
-const line = { credential: null, socket: null, timer: null, tickMs: 250, lastUse: 0, opening: null, onAck: null }
-
-const rate = { lastCallAt: 0, fastRun: 0, slowRun: 0 }
-
-function holdingIsCheaper() {
+const callsKeepComing = () => {
   const now = Date.now()
   const gap = rate.lastCallAt ? now - rate.lastCallAt : Infinity
   rate.lastCallAt = now
-  if (gap <= line.tickMs) { rate.fastRun += 1; rate.slowRun = 0 }
-  else { rate.slowRun += 1; rate.fastRun = 0 }
-
-  if (line.credential) return rate.slowRun < AUTO_SLOW_RUN
-  return rate.fastRun >= AUTO_FAST_RUN
+  rate.run = gap <= AUTO_GAP_MS ? rate.run + 1 : 1
+  return rate.run >= AUTO_FAST_RUN
 }
 
 const dropLine = (why) => {
-  if (line.timer) { clearInterval(line.timer); line.timer = null }
-  try { line.socket?.close() } catch {}
-  if (line.credential) log(`line closed (${why})`)
-  line.socket = null
+  if (line.offTimer) { clearTimeout(line.offTimer); line.offTimer = null }
+  const credential = line.credential
+  if (credential) log(`line let go (${why})`)
   line.credential = null
+  line.metering = false
+  return credential
 }
 
-let ticking = false
-const tick = async () => {
-  if (capReached) return dropLine('spend cap reached')
-  if (!line.credential || ticking) return
-  ticking = true
-  try {
-    const out = await payFirst('tick', { line: line.credential })
-    const body = String(out?.content?.[0]?.text ?? '')
-    if (/"paid"\s*:\s*false/.test(body) || lineWasRefused(out)) {
-      dropLine('the line this tick paid for is gone')
-    }
-  } catch (e) { dropLine(`tick failed: ${e.message}`) }
-  finally { ticking = false }
+const letGo = async (why) => {
+  const credential = dropLine(why)
+  if (!credential) return
+  await lineOp({ url: lineUrl(), op: 'off', credential, fetchFn: net }).catch(() => {})
+  await lineOp({ url: lineUrl(), op: 'close', credential, fetchFn: net }).catch(() => {})
 }
 
-const turnOn = (why) => new Promise((resolve) => {
-  if (!line.socket) return resolve(false)
-  log(`${why}; turning it on`)
-  const settle = setTimeout(() => { line.onAck = null; resolve(false) }, 2_000)
-  line.onAck = (m) => { clearTimeout(settle); resolve(m?.msRemaining > 0) }
-  try { line.socket.send(JSON.stringify({ op: 'on' })) } catch { clearTimeout(settle); line.onAck = null; resolve(false) }
-})
-
-const METER_OFF = /"code"\s*:\s*"line_unpaid"/
-const meterOff = (out) => METER_OFF.test(String(out?.content?.[0]?.text ?? ''))
-
-const callOnce = async (name, args) => {
-  let out = await upstream.callTool(name, { ...args, line: line.credential })
-  if (!meterOff(out) || !line.credential) return out
-  await tick()
-  await turnOn('the line answered line_unpaid')
-  return upstream.callTool(name, { ...args, line: line.credential })
+const touch = () => {
+  if (line.offTimer) clearTimeout(line.offTimer)
+  line.offTimer = setTimeout(() => {
+    line.offTimer = null
+    if (!line.credential || !line.metering) return
+    line.metering = false
+    lineOp({ url: lineUrl(), op: 'off', credential: line.credential, fetchFn: net })
+      .then((a) => { if (a.op === 'off') log(`meter off after ${IDLE_MS} ms idle; ${a.msRemaining ?? line.msRemaining} ms held`) })
+      .catch(() => {})
+  }, IDLE_MS)
+  line.offTimer.unref?.()
 }
 
-const openLine = () => {
-  if (line.credential || line.opening) return line.opening
-  if (!channelId) return null
-  line.opening = new Promise((resolve) => {
-    let socket
-    try { socket = new WebSocket(wsURL()) } catch (e) { log(`line: ${e.message}`); return resolve(null) }
-    const give_up = setTimeout(() => { try { socket.close() } catch {} ; resolve(null) }, 10_000)
-    socket.onmessage = async (ev) => {
-      let m; try { m = JSON.parse(String(ev.data)) } catch { return }
-      if (m.op === 'challenge') {
-        try {
-          const signature = await account.signMessage({ message: m.message })
-          socket.send(JSON.stringify({ op: 'prove', signature }))
-        } catch (e) {
-          clearTimeout(give_up); log(`line: cannot sign open challenge — ${e.message}`)
-          try { socket.close() } catch {}; resolve(null)
-        }
-        return
-      }
-      if (m.op === 'open_failed') {
-        clearTimeout(give_up); log(`line: open refused — ${m.error ?? m.why}`)
-        try { socket.close() } catch {}; resolve(null); return
-      }
-      if (m.op === 'opened') {
-        clearTimeout(give_up)
-        line.socket = socket
-        line.credential = m.credential
-        line.tickMs = lineFacts.tickMs
-        line.lastUse = Date.now()
-        log(`line open — ${lineFacts.microUSDPerMs ?? '?'} micro-USD/ms, ` +
-            `collateral buys ${m.buysMs ?? '?'}ms`)
-        const first = tick().then(() => (m.metering === false ? turnOn('the meter on this channel is off (someone sent {op:"off"})') : null))
-        line.timer = setInterval(() => {
-          if (LINE_MODE === 'auto' && Date.now() - line.lastUse > line.tickMs * 4) return dropLine('idle')
-          tick()
-        }, line.tickMs)
-        line.timer.unref?.()
-        first.then(() => resolve(line.credential))
-      } else if (m.op === 'on') {
-        line.onAck?.(m); line.onAck = null
-      } else if (m.op === 'closing' || m.error) {
-        log(`line: ${m.why ?? m.error}`)
-        clearTimeout(give_up)
-        dropLine(m.why ?? m.error)
-        resolve(null)
-      }
-    }
-    socket.onopen = () => socket.send(JSON.stringify({ op: 'open', channelId }))
-    socket.onclose = () => { clearTimeout(give_up); dropLine('socket closed'); resolve(null) }
-    socket.onerror = () => {}
-  }).finally(() => { line.opening = null })
+const holdLine = () => {
+  if (line.credential) return Promise.resolve(true)
+  if (line.opening) return line.opening
+  if (!channelId || KEYLESS) return Promise.resolve(false)
+  line.opening = (async () => {
+    const o = await openLine({ url: lineUrl(), channelId, signer: account, fetchFn: net })
+    if (o.op !== 'opened') { log(`line not opened: ${o.code}${o.why ? ` (${o.why})` : ''}`); return false }
+    line.credential = o.credential
+    line.metering = o.metering !== false
+    line.msRemaining = Number(o.msRemaining ?? 0)
+    log(`line open at ${lineUrl()}: ${line.msRemaining} ms on the meter`)
+    return true
+  })().finally(() => { line.opening = null })
   return line.opening
+}
+
+const meterOn = async () => {
+  if (line.metering) return true
+  const a = await lineOp({ url: lineUrl(), op: 'on', credential: line.credential, fetchFn: net })
+  if (a.op === 'on') { line.metering = true; line.msRemaining = Number(a.msRemaining ?? line.msRemaining); return true }
+  if (LINE_GONE.has(a.code)) dropLine(a.code)
+  return false
+}
+
+const buyTime = async (wantMs) => {
+  if (!seller.time) await tagOf('buy_time')
+  if (!seller.time) return false
+  const blocks = blocksFor({ wantMs, time: seller.time, availableMicro: await available() })
+  const out = await payFirst('buy_time', { blocks })
+  const b = bodyOf(out)
+  if (out?.isError || !b) { log(`buy_time: ${codeOf(out) ?? reasonFrom(out) ?? 'no answer'}`); return false }
+  line.buys += 1
+  if (Number.isFinite(Number(b.msRemaining))) line.msRemaining = Number(b.msRemaining)
+  log(`bought ${b.boughtMs ?? blocks * seller.time.blockMs} ms of line time for ${blocks * seller.time.blockMicro} micro-USD; ${line.msRemaining} ms on the meter`)
+  return true
+}
+
+const ride = async (name, args) => {
+  let out = null
+  let want = AHEAD_MS
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (capReached) break
+    if (!(await holdLine())) return null
+    if (!(await meterOn())) { if (!line.credential) continue; return null }
+    if (line.msRemaining < (seller.time?.blockMs ?? 250) && !(await buyTime(want))) return null
+    out = await callOnLineRaw(name, args, line.credential)
+    const m = meterOf(out)
+    if (m && Number.isFinite(Number(m.msRemaining))) line.msRemaining = Number(m.msRemaining)
+    const code = codeOf(out)
+    if (code === 'meter_off') { line.metering = false; continue }
+    if (code === 'out_of_time') {
+      line.msRemaining = Number(bodyOf(out)?.msRemaining ?? 0)
+      want *= 2
+      log(`the line ran out of time on ${name}; buying ${want} ms and calling again`)
+      continue
+    }
+    if (code && LINE_GONE.has(code)) { dropLine(code); continue }
+    touch()
+    return out
+  }
+  return out
+}
+
+const reasonFrom = (out) => {
+  const body = bodyOf(out)
+  const why = body?.why ?? body?.message ?? body?.error ?? body?.code
+  return typeof why === 'string' && why ? why.slice(0, 160) : null
+}
+
+const capAnswer = () => ({ isError: true, content: [{ type: 'text', text: JSON.stringify({
+  error: 'x402_bridge_spend_cap_reached',
+  spentMicroUSD, capMicroUSD: MAX_SPEND,
+  message: 'This bridge has spent its X402_MAX_SPEND ceiling and will not pay for more. ' +
+    'Raise it, set X402_MAX_SPEND=0 to remove it, or restart the bridge.' }) }] })
+
+let fetchSpent = 0
+const fetchTool = KEYLESS || cardSigner ? null : makeFetchTool({ signer: account, pub, network: NETWORK, grant: GRANT, log, budget: {
+  allows: (units) => !MAX_SPEND || spentMicroUSD + fetchSpent + units <= MAX_SPEND,
+  spend: (units) => { fetchSpent += units },
+} })
+
+const callTool = async (name, args) => {
+  if (name === FETCH_TOOL.name && fetchTool) return fetchTool(args)
+  if (capReached) return capAnswer()
+  if (KEYLESS) return callFree(name, args)
+  if (name === 'buy_time') {
+    const out = await payFirst(name, args)
+    const b = bodyOf(out)
+    if (!out?.isError && Number.isFinite(Number(b?.msRemaining))) line.msRemaining = Number(b.msRemaining)
+    return out
+  }
+  const tag = await tagOf(name)
+  if (!isTimeTag(tag) || LINE_MODE === 'off') return payFirst(name, args)
+  const fast = callsKeepComing()
+  const worth = line.credential && line.msRemaining > 0 ? true : LINE_MODE === 'on' || fast
+  if (worth && channelId) {
+    const out = await ride(name, args)
+    if (out) return out
+  }
+  const out = await payFirst(name, args)
+  const code = codeOf(out)
+  if ((code === 'out_of_time' || code === 'line_required') && channelId) {
+    log(code === 'out_of_time' ? `${name} needs more than one block: calling it on a line` : 'the seller serves this channel on a line')
+    const again = await ride(name, args)
+    if (again) return again
+  }
+  return out
 }
 
 const server = new Server({ name: NAME, version: VERSION }, { capabilities: { tools: {} } })
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const { tools } = await upstream.listTools()
-  return { tools }
+  learnTools(tools)
+  return { tools: fetchTool && !tools.some((t) => t.name === FETCH_TOOL.name) ? [...tools, FETCH_TOOL] : tools }
 })
-const callOnLine = async (name, args) => {
-  if (capReached) {
-    return { isError: true, content: [{ type: 'text', text: JSON.stringify({
-      error: 'x402_bridge_spend_cap_reached',
-      spentMicroUSD, capMicroUSD: MAX_SPEND,
-      message: 'This bridge has spent its X402_MAX_SPEND ceiling and will not pay for more. ' +
-        'Raise it, set X402_MAX_SPEND=0 to remove it, or restart the bridge.' }) }] }
-  }
-  line.lastUse = Date.now()
-  if (name === 'tick') {
-    if (!line.credential && channelId) await openLine()
-    return payFirst('tick', line.credential ? { line: line.credential } : args)
-  }
-  if (LINE_MODE === 'off') return payOrRide(name, args)
-
-  if (LINE_MODE === 'auto') {
-    if (!holdingIsCheaper()) {
-      if (line.credential) dropLine('slower than the minimum hold — slices are cheaper')
-      return payOrRide(name, args)
-    }
-  }
-
-  if (!channelId) return payOrRide(name, args)
-
-  for (const attempt of [1, 2]) {
-    if (!line.credential) await openLine()
-    if (!line.credential) break
-    const out = await callOnce(name, args)
-    if (!lineWasRefused(out)) return out
-    dropLine(reasonFrom(out) ?? 'refused by the server')
-    if (attempt === 2) {
-      log('the line was refused twice; paying for this call directly. If the reason above ' +
-        'is collateral, raise X402_DEPOSIT_MULTIPLIER — the scheme minimum is 3.')
-    }
-  }
-  return payOrRide(name, args)
-}
-
-const LINE_REQUIRED = /"(?:error|code)"\s*:\s*"line_required"/
-const lineRequired = (out) => LINE_REQUIRED.test(String(out?.content?.[0]?.text ?? ''))
-
-const payOrRide = async (name, args) => {
-  const out = await payFirst(name, args)
-  if (!lineRequired(out) || !channelId) return out
-  log('the channel is funded: paid work rides a line from here — opening one for this call')
-  if (!line.credential) await openLine()
-  if (!line.credential) return out
-  return callOnce(name, args)
-}
-
-const LINE_IS_GONE = /"lineGone"\s*:\s*true|"(?:error|code)"\s*:\s*"(?:unknown_line|line_unpaid|line_closed)"/
-const lineWasRefused = (out) => LINE_IS_GONE.test(String(out?.content?.[0]?.text ?? ''))
-
-const reasonFrom = (out) => {
-  try {
-    const body = JSON.parse(String(out?.content?.[0]?.text ?? ''))
-    const why = body.why ?? body.message ?? body.error ?? body.code
-    return typeof why === 'string' && why ? why.slice(0, 160) : null
-  } catch { return null }
-}
-
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const out = await callOnLine(req.params.name, req.params.arguments ?? {})
-  return out
-})
-
-const stopPayingQuietly = async () => {
-  dropLine('one-shot call finished')
-  await new Promise(r => setTimeout(r, 50))
-}
+server.setRequestHandler(CallToolRequestSchema, (req) => callTool(req.params.name, req.params.arguments ?? {}))
 
 let leaving = false
-const stopPaying = (why) => {
+const stopPaying = async (why) => {
   if (leaving) return
   leaving = true
-  dropLine(why)
+  await Promise.race([letGo(why), new Promise((r) => setTimeout(r, 3000))])
   process.exit(0)
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => stopPaying('shutting down'))
@@ -591,11 +556,16 @@ for (const ev of ['end', 'close']) {
 }
 process.on('disconnect', () => stopPaying('parent disconnected'))
 
+const finish = async (code) => {
+  leaving = true
+  await Promise.race([letGo('one-shot call finished'), new Promise((r) => setTimeout(r, 3000))])
+  process.exit(code)
+}
+
 if (has('--tools')) {
   const out = await upstream.listTools()
   process.stdout.write(JSON.stringify(out.tools.map(t => t.name), null, 2) + '\n')
-  await stopPayingQuietly()
-  process.exit(0)
+  await finish(0)
 }
 
 if (has('--call')) {
@@ -607,21 +577,24 @@ if (has('--call')) {
     try { args = JSON.parse(rawArgs) }
     catch (e) { process.stderr.write(`--call arguments must be JSON: ${e.message}\n`); process.exit(2) }
   }
-  try {
-    const out = await callOnLine(tool, args)
-    const text = out?.content?.[0]?.text
-    process.stdout.write((typeof text === 'string' ? text : JSON.stringify(out)) + '\n')
-    await stopPayingQuietly()
-    process.exit(out?.isError ? 1 : 0)
-  } catch (e) {
-    process.stderr.write(`call failed: ${e.message}\n`)
-    await stopPayingQuietly()
-    process.exit(1)
+  const times = Math.max(1, Math.trunc(Number(flag('--times') ?? 1)) || 1)
+  let failed = false
+  for (let i = 0; i < times; i++) {
+    try {
+      const out = await callTool(tool, args)
+      const text = out?.content?.[0]?.text
+      process.stdout.write((typeof text === 'string' ? text : JSON.stringify(out)) + '\n')
+      if (out?.isError) failed = true
+    } catch (e) {
+      process.stderr.write(`call failed: ${e.message}\n`)
+      failed = true
+    }
   }
+  await finish(failed ? 1 : 0)
 }
 
 await server.connect(new StdioServerTransport())
-if (LINE_MODE === 'on' && channelId) await openLine()
+if (LINE_MODE === 'on' && channelId) await holdLine()
 log(`bridge up on stdio — line mode ${LINE_MODE}${channelId ? '' : ' (channel opens on your first call)'}` +
   ` | spend cap ${MAX_SPEND ? MAX_SPEND + ' ' + spendUnit : 'NONE (X402_MAX_SPEND=0)'}` +
   ' | stops when stdin closes')

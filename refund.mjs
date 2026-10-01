@@ -59,24 +59,37 @@ export const termsInHttp = async (r) => {
   try { return JSON.parse(Buffer.from(header, 'base64').toString('utf8')) } catch { return null }
 }
 
-export const hearingMcp = (fetchFn, onRefundUrl) => async (input, init = {}) => {
+export const hearingMcp = (fetchFn, onRefundUrl, onTerms = () => {}) => async (input, init = {}) => {
   const r = await fetchFn(input, init)
   if (String(init.method ?? 'GET').toUpperCase() === 'POST' && r.ok && r.body) {
     r.clone().text().then((text) => {
-      const u = refundUrlOf(termsInMcp(text, r.headers.get('content-type')))
+      const terms = termsInMcp(text, r.headers.get('content-type'))
+      if (!terms) return
+      const u = refundUrlOf(terms)
       if (u) onRefundUrl(u)
+      onTerms(terms)
     }).catch(() => {})
   }
   return r
 }
 
-export const hearingHttp = (fetchFn, onRefundUrl) => async (input, init) => {
+export const hearingHttp = (fetchFn, onRefundUrl, onTerms = () => {}) => async (input, init) => {
   const r = await fetchFn(input, init)
   if (r.status === 402) {
-    const u = refundUrlOf(await termsInHttp(r))
+    const terms = await termsInHttp(r)
+    const u = refundUrlOf(terms)
     if (u) onRefundUrl(u)
+    if (terms) onTerms(terms)
   }
   return r
+}
+
+export const refundUrlInTerms = (terms) => {
+  if (!terms || typeof terms !== 'object') return null
+  const r = terms.refund
+  if (typeof r === 'string') return refundUrlIn(r)
+  if (r && typeof r === 'object') return refundUrlIn(`POST ${r.route ?? ''}`) ?? refundUrlIn(r.terms) ?? refundUrlIn(r.how)
+  return null
 }
 
 const SELLER_FILE = 'seller.json'

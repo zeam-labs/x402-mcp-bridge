@@ -1,21 +1,23 @@
 {
   "name": "@zeam-labs/x402-mcp-bridge",
-  "version": "2.4.4",
-  "description": "Put a wallet in front of any x402-paid MCP server, and hold a metered line on the ones that sell time. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
+  "version": "2.5.0",
+  "description": "Put a wallet in front of any x402-paid MCP server: pay per call, or buy time and ride a ZEAM :: Pass line. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
   "type": "module",
   "bin": {
     "x402-mcp-bridge": "index.mjs"
   },
   "main": "index.mjs",
   "scripts": {
-    "test": "node test/exact.mjs && node --test test/*.test.mjs",
+    "test": "node test/exact.mjs && node test/fetch.mjs && node --test test/*.test.mjs",
     "smoke": "node --test test/smoke-pass.mjs"
   },
   "files": [
     "README.md",
     "client.mjs",
     "ethers.mjs",
+    "fetch.mjs",
     "index.mjs",
+    "line.mjs",
     "pay.mjs",
     "refund.mjs",
     "viem.mjs"
