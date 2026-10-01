@@ -2,7 +2,7 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` 3.0.1 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
+`@zeam-labs/x402-mcp-bridge` 3.0.2 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
 
 A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
 ZEAM Prism and with any ZEAM :: Pass seller.
@@ -12,8 +12,10 @@ ZEAM Prism and with any ZEAM :: Pass seller.
 Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
 
     npx -y @zeam-labs/x402-mcp-bridge --tools
-    npx -y @zeam-labs/x402-mcp-bridge --call call_rpc '{"chain":"base","method":"eth_blockNumber","params":[]}'
-    X402_MCP_URL=https://seller.example/agents/mcp npx -y @zeam-labs/x402-mcp-bridge --call add '{"a":1,"b":2}'
+    npx -y @zeam-labs/x402-mcp-bridge --call call_rpc \
+      '{"chain":"base","method":"eth_blockNumber","params":[]}'
+    X402_MCP_URL=https://seller.example/agents/mcp \
+      npx -y @zeam-labs/x402-mcp-bridge --call add '{"a":1,"b":2}'
 
 `--times N` repeats a `--call` in one process. With no arguments the bridge is an MCP stdio server:
 
@@ -22,7 +24,7 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.1"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.2"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -63,11 +65,11 @@ line a call costs the milliseconds it runs; calls at once burn once.
 
 `X402_LINE`:
 
-| value | |
-|---|---|
-| `auto` (default) | per call until 2 time-tool calls arrive within 10 s (`X402_AUTO_FAST_RUN`, `X402_AUTO_GAP_MS`), then a line while it holds time. A call cut at one block (`out_of_time`) is called again on a line. |
-| `on` | every time-tool call rides a line. |
-| `off` | per call only. |
+- `auto` (default): per call until 2 time-tool calls arrive within 10 s
+  (`X402_AUTO_FAST_RUN`, `X402_AUTO_GAP_MS`), then a line while it holds time.
+  A call cut at one block (`out_of_time`) is called again on a line.
+- `on`: every time-tool call rides a line.
+- `off`: per call only.
 
 Tools priced per call never ride a line.
 
@@ -102,7 +104,8 @@ every request, over MCP and HTTP, so a key admitted by grant passes the gate.
 
 `x402_fetch` is offered beside the seller's tools. It calls a URL and pays a 402 under the x402 `exact` scheme.
 
-    npx -y @zeam-labs/x402-mcp-bridge --call x402_fetch '{"url":"https://api.example.com/v1/quote","body":{"symbol":"ETH"}}'
+    npx -y @zeam-labs/x402-mcp-bridge --call x402_fetch \
+      '{"url":"https://api.example.com/v1/quote","body":{"symbol":"ETH"}}'
 
 - `pay: false` returns the terms without paying.
 - `maxAmount` (base units) refuses a larger quote before signing.
@@ -116,7 +119,10 @@ import { createPublicClient } from 'viem'
 import { base } from 'viem/chains'
 import { prism } from '@zeam-labs/x402-mcp-bridge/viem'
 
-const client = createPublicClient({ chain: base, transport: prism({ key: process.env.X402_PRIVATE_KEY }) })
+const client = createPublicClient({
+  chain: base,
+  transport: prism({ key: process.env.X402_PRIVATE_KEY }),
+})
 await client.getBlockNumber()
 ```
 
@@ -138,21 +144,23 @@ Options: `url`, `chain`, `network`, `stateDir`, `depositMultiplier`, `asset`, `s
 
 ## Configuration
 
-| variable | default | |
-|---|---|---|
-| `X402_PRIVATE_KEY` | — | funds the channel and signs |
-| `X402_MCP_URL` | `https://mcp.zeamprism.com/mcp` | any x402 MCP endpoint |
-| `X402_LINE` | `auto` | `auto`, `on`, `off` |
-| `X402_LINE_AHEAD_MS` | `2000` | time bought per `buy_time` |
-| `X402_LINE_IDLE_MS` | `1000` | meter off after this idle |
-| `X402_MAX_SPEND` | `10000000` ($10) | ceiling for this run, µUSD; `0` removes it |
-| `X402_DEPOSIT_MULTIPLIER` | `40` | deposit = price × this, at least the seller's floor; minimum 3 |
-| `X402_GRANT` | — | `x-grant` on every request |
-| `X402_RPC_URL` | the chain's public RPC | your node for chain reads |
-| `X402_STATE_DIR` | `~/.x402-mcp-bridge/<host>/<address>` | channel state; keep it |
-| `X402_SALT` | scheme default | a distinct channel |
-| `X402_ASSET` | first quoted | address or symbol |
-| `X402_NETWORK` | `eip155:8453` | CAIP-2 |
+- `X402_PRIVATE_KEY` (no default): funds the channel and signs.
+- `X402_MCP_URL` (default `https://mcp.zeamprism.com/mcp`): any x402 MCP
+  endpoint.
+- `X402_LINE` (default `auto`): `auto`, `on`, `off`.
+- `X402_LINE_AHEAD_MS` (default `2000`): time bought per `buy_time`.
+- `X402_LINE_IDLE_MS` (default `1000`): meter off after this idle.
+- `X402_MAX_SPEND` (default `10000000`, $10): ceiling for this run, µUSD; `0`
+  removes it.
+- `X402_DEPOSIT_MULTIPLIER` (default `40`): deposit = price × this, at least
+  the seller's floor; minimum 3.
+- `X402_GRANT` (no default): `x-grant` on every request.
+- `X402_RPC_URL` (default the chain's public RPC): your node for chain reads.
+- `X402_STATE_DIR` (default `~/.x402-mcp-bridge/<host>/<address>`): channel
+  state; keep it.
+- `X402_SALT` (default the scheme's): a distinct channel.
+- `X402_ASSET` (default first quoted): address or symbol.
+- `X402_NETWORK` (default `eip155:8453`): CAIP-2.
 
 USDT, DAI and WETH settle through Permit2: approve `0x000000000022D473030F116dDEE9F6B43aC78BA3` once. USDC needs no
 approval.
@@ -167,8 +175,8 @@ approval.
 
 The versions are pinned exactly.
 
-    npm view @zeam-labs/x402-mcp-bridge@3.0.1 version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge@3.0.1
+    npm view @zeam-labs/x402-mcp-bridge@3.0.2 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@3.0.2
     less package/index.mjs
 
 MIT.
