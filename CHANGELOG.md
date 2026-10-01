@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.2
+
+- README reads in a narrow column: the `X402_LINE` and configuration tables are lists, and every code
+  block fits 80 columns. No code changes.
+
 ## 3.0.1
 
 - The npm page: keywords, author, homepage https://zeamprism.com/connect, LICENSE and CHANGELOG.md in the package.
