@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.1
+
+- The npm page: keywords, author, homepage https://zeamprism.com/connect, LICENSE and CHANGELOG.md in the package.
+  The README says `ethers` must be installed for the ethers provider and no longer names test files the package
+  does not carry. No code changes.
+
 ## 3.0.0
 
 - Lines are ZEAM :: Pass lines: `POST <base>/line` open → EIP-191 proof by the payer key → credential, sent as

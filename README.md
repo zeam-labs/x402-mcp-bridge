@@ -2,7 +2,7 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` 3.0.0 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
+`@zeam-labs/x402-mcp-bridge` 3.0.1 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
 
 A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
 ZEAM Prism and with any ZEAM :: Pass seller.
@@ -22,7 +22,7 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.0"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.1"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -120,6 +120,8 @@ const client = createPublicClient({ chain: base, transport: prism({ key: process
 await client.getBlockNumber()
 ```
 
+The ethers provider needs `ethers` 6 or later installed beside the bridge (`npm install ethers`).
+
 ```js
 import { PrismProvider } from '@zeam-labs/x402-mcp-bridge/ethers'
 const provider = new PrismProvider({ key: process.env.X402_PRIVATE_KEY })
@@ -133,7 +135,6 @@ const provider = new PrismProvider({ key: process.env.X402_PRIVATE_KEY })
 
 Options: `url`, `chain`, `network`, `stateDir`, `depositMultiplier`, `asset`, `salt`, `rpcUrl`, `grant`, `aheadMs`,
 `idleMs`, `dropAfterMs`, `log`. The `X402_*` variables are the defaults; the state directory is shared with the bridge.
-`test/viem.mjs` and `test/ethers.mjs` run them against a live server with real money.
 
 ## Configuration
 
@@ -166,8 +167,8 @@ approval.
 
 The versions are pinned exactly.
 
-    npm view @zeam-labs/x402-mcp-bridge@3.0.0 version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge@3.0.0
+    npm view @zeam-labs/x402-mcp-bridge@3.0.1 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@3.0.1
     less package/index.mjs
 
 MIT.
