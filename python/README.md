@@ -1,6 +1,6 @@
 # zeam-prism
 
-A web3.py provider that pays [ZEAM Prism](https://mcp.zeamprism.com/llms.txt) from a wallet.
+A web3.py provider that pays ZEAM Prism https://mcp.zeamprism.com/llms.txt from a wallet.
 
 ```
 pip install 'git+https://github.com/zeam-labs/x402-mcp-bridge@<commit>#subdirectory=python'

@@ -2,7 +2,7 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` 3.0.2 on npm. Source: <https://github.com/zeam-labs/x402-mcp-bridge>.
+`@zeam-labs/x402-mcp-bridge` 3.0.3 on npm. Source: https://github.com/zeam-labs/x402-mcp-bridge
 
 A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
 ZEAM Prism and with any ZEAM :: Pass seller.
@@ -24,7 +24,7 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.2"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.0.3"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -175,8 +175,8 @@ approval.
 
 The versions are pinned exactly.
 
-    npm view @zeam-labs/x402-mcp-bridge@3.0.2 version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge@3.0.2
+    npm view @zeam-labs/x402-mcp-bridge@3.0.3 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@3.0.3
     less package/index.mjs
 
 MIT.

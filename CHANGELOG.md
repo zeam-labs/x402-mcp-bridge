@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.3
+
+- No URL in the README or this changelog is followed by punctuation: plain-text link finders on package
+  pages kept a trailing comma or bracket in the URL. No code changes.
+
 ## 3.0.2
 
 - README reads in a narrow column: the `X402_LINE` and configuration tables are lists, and every code
@@ -7,7 +12,7 @@
 
 ## 3.0.1
 
-- The npm page: keywords, author, homepage https://zeamprism.com/connect, LICENSE and CHANGELOG.md in the package.
+- The npm page: keywords, author, homepage https://zeamprism.com/connect and LICENSE and CHANGELOG.md in the package.
   The README says `ethers` must be installed for the ethers provider and no longer names test files the package
   does not carry. No code changes.
 
