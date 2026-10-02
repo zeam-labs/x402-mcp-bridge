@@ -1,6 +1,6 @@
 {
   "name": "@zeam-labs/x402-mcp-bridge",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Put a wallet in front of any x402-paid MCP server: pay per call, or buy time and ride a ZEAM :: Pass line. Stock MCP clients cannot construct x402 payments; this one does, and proxies your existing client through it.",
   "keywords": [
     "x402",
