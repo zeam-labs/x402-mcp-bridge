@@ -464,18 +464,27 @@ const buyTime = async (wantMs) => {
   return true
 }
 
-const ride = async (name, args) => {
+const ride = async (name, args, needMs = 0) => {
   let out = null
-  let want = AHEAD_MS
+  let want = Math.max(AHEAD_MS, Math.ceil(needMs * 1.25))
+  let need = needMs > 0 ? want : MIN_BUY_MS
   for (let attempt = 0; attempt < 4; attempt++) {
     if (capReached) break
     if (!(await holdLine())) return null
     if (!(await meterOn())) { if (!line.credential) continue; return null }
-    if (line.msRemaining < MIN_BUY_MS && !(await buyTime(want))) return null
+    if (line.msRemaining < need && !(await buyTime(Math.max(MIN_BUY_MS, want - line.msRemaining)))) return null
     out = await callOnLineRaw(name, args, line.credential)
     const m = meterOf(out)
     if (m && Number.isFinite(Number(m.msRemaining))) line.msRemaining = Number(m.msRemaining)
     const code = codeOf(out)
+    const cut = code ? null : bodyOf(out)
+    if (cut?.error === 'out_of_time' && Number(cut.needsMs) > 0 && attempt === 0) {
+      const ran = Number(m?.elapsedMs)
+      want = Math.ceil(((Number.isFinite(ran) && ran > 0 ? ran : want) + Number(cut.needsMs)) * 1.25)
+      need = want
+      log(`${name} was cut with about ${cut.needsMs} ms still to run; buying up to ${want} ms and calling it again`)
+      continue
+    }
     if (code === 'meter_off') { line.metering = false; continue }
     if (code === 'out_of_time') {
       line.msRemaining = Number(bodyOf(out)?.msRemaining ?? 0)
@@ -530,13 +539,17 @@ const callTool = async (name, args) => {
   const code = codeOf(out)
   if ((code === 'out_of_time' || code === 'line_required') && channelId) {
     log(code === 'out_of_time' ? `${name} needs more than one block: calling it on a line` : 'the seller serves this channel on a line')
-    const again = await ride(name, args)
+    const again = await ride(name, args, Number(bodyOf(out)?.needsMs) || 0)
     if (again) return again
   }
   return out
 }
 
-const server = new Server({ name: NAME, version: VERSION }, { capabilities: { tools: {} } })
+const told = typeof plain.getInstructions === 'function' ? plain.getInstructions() : null
+const BRIDGE_NOTE = KEYLESS
+  ? 'You are connected through the x402 Bridge with no wallet key: the free tools work, and a paid call returns the seller\'s terms.'
+  : 'You are connected through the x402 Bridge. It pays for paid tools from the wallet it was started with, and buys line time when a tool needs longer: do not call buy_time or line yourself. To take back what is unspent, the person runs the bridge once with --refund. No payment steps are needed from you; the seller\'s payment instructions below are for clients without the Bridge.'
+const server = new Server({ name: NAME, version: VERSION }, { capabilities: { tools: {} }, instructions: told ? `${BRIDGE_NOTE}\n\n${told}` : BRIDGE_NOTE })
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const { tools } = await upstream.listTools()
   learnTools(tools)

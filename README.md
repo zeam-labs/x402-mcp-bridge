@@ -2,7 +2,7 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` 3.1.0 on npm. Source: https://github.com/zeam-labs/x402-mcp-bridge
+`@zeam-labs/x402-mcp-bridge` 3.2.0 on npm. Source: https://github.com/zeam-labs/x402-mcp-bridge
 
 A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
 ZEAM Prism and with any ZEAM :: Pass seller.
@@ -24,7 +24,7 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.1.0"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.2.0"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -32,6 +32,8 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
 ```
 
 Without a key it serves `tools/list` and the free tools; a paid call returns the seller's terms.
+
+The seller's instructions reach your client, under a note that the bridge is paying.
 
 Results pass through whole: `content`, `structuredContent`, `isError` and `_meta`.
 
@@ -69,6 +71,8 @@ milliseconds it runs; calls at once burn once.
 - `auto` (default): per call until 2 time-tool calls arrive within 10 s
   (`X402_AUTO_FAST_RUN`, `X402_AUTO_GAP_MS`), then a line while it holds time.
   A call cut for running past what one call buys (`out_of_time`) is called again on a line.
+  When the seller says how long the call needs (`needsMs`), the bridge buys that much, plus a quarter, before it
+  calls again.
 - `on`: every time-tool call rides a line.
 - `off`: per call only.
 
@@ -176,8 +180,8 @@ approval.
 
 The versions are pinned exactly.
 
-    npm view @zeam-labs/x402-mcp-bridge@3.1.0 version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge@3.1.0
+    npm view @zeam-labs/x402-mcp-bridge@3.2.0 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@3.2.0
     less package/index.mjs
 
 MIT.

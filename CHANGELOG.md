@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.0
+
+- A call cut for time is finished in one purchase. When the seller's answer says how long the call needs
+  (`needsMs`), the bridge buys that much line time, plus a quarter, and calls again; before, it bought
+  `X402_LINE_AHEAD_MS` and handed back whatever fitted.
+- The seller's instructions are passed to your MCP client, under a note that the bridge is paying. Before, a
+  client behind the bridge received none.
+
 ## 3.1.0
 
 - Line time is bought in milliseconds. A ZEAM :: Pass seller now tags `buy_time` `{"usd", "per": "ms", "ms"}`
