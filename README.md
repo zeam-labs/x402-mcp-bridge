@@ -2,14 +2,16 @@
 
 [![ZEAM Prism MCP MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp/badges/score.svg)](https://glama.ai/mcp/connectors/com.zeamprism/prism-mcp)
 
-`@zeam-labs/x402-mcp-bridge` 3.2.0 on npm. Source: https://github.com/zeam-labs/x402-mcp-bridge
+`@zeam-labs/x402-mcp-bridge` 3.2.2 on npm. Source: https://github.com/zeam-labs/x402-mcp-bridge
 
 A wallet in front of a paid MCP server. It pays per call, or buys time and rides a ZEAM :: Pass line. It works with
 ZEAM Prism and with any ZEAM :: Pass seller.
 
 ## Run it
 
-Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
+`--help` and `--version` print and exit; neither contacts a server.
+
+It needs Node.js 20 or later. Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
 
     npx -y @zeam-labs/x402-mcp-bridge --tools
     npx -y @zeam-labs/x402-mcp-bridge --call call_rpc \
@@ -24,7 +26,7 @@ Export your key as `X402_PRIVATE_KEY`. It signs locally and is never sent.
   "mcpServers": {
     "prism": {
       "command": "npx",
-      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.2.0"],
+      "args": ["-y", "@zeam-labs/x402-mcp-bridge@3.2.2"],
       "env": { "X402_PRIVATE_KEY": "0x..." }
     }
   }
@@ -174,14 +176,19 @@ approval.
 
 - It exits when stdin closes, and lets its line go.
 - It stops at `X402_MAX_SPEND`: further calls return `x402_bridge_spend_cap_reached`.
+- On `--refund`, when the seller asks for the refund's gas in USDC, it signs only a payment to the relay's own gas
+  wallet, for the amount quoted, no more than twice what the relay prices that gas at, less than the refund and
+  within `X402_MAX_SPEND`. Otherwise it signs nothing and says why; `--self-send` always works. The relay is
+  ZEAM's (`https://api.zeampass.com/relay`); `X402_RELAY_URL` names another.
 - Lost state costs one probe to resync, then one deposit.
 
 ## Verify before you run it
 
 The versions are pinned exactly.
 
-    npm view @zeam-labs/x402-mcp-bridge@3.2.0 version dist.integrity
-    npm pack @zeam-labs/x402-mcp-bridge@3.2.0
+    npm view @zeam-labs/x402-mcp-bridge@3.2.2 version dist.integrity
+    npm pack @zeam-labs/x402-mcp-bridge@3.2.2
     less package/index.mjs
 
-MIT.
+MIT. Patent pending: ZEAM :: Pass, which this bridge pays through, is the subject of a pending United States patent
+application.
